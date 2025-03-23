@@ -33,8 +33,6 @@ use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef, ParseOrSeman
 
 pub use lightning::onion_message::dns_resolution::HumanReadableName;
 
-#[cfg(feature = "std")]
-pub mod onion_message_resolver;
 
 #[cfg(feature = "http")]
 pub mod http_resolver;
@@ -581,19 +579,13 @@ pub type HrnResolutionFuture<'a> =
 /// For clients that also support LN-Address, if the BIP 353 resolution fails they should then fall
 /// back to LN-Address to resolve to a Lightning BOLT 11 using HTTP.
 ///
-/// A resolver which uses onion messages over the lightning network for LDK users is provided in
-#[cfg_attr(feature = "std", doc = "[`onion_message_resolver::LDKOnionMessageDNSSECHrnResolver`]")]
-#[cfg_attr(
-	not(feature = "std"),
-	doc = "`onion_message_resolver::LDKOnionMessageDNSSECHrnResolver`"
-)]
-/// if this crate is built with the `std` feature.
 ///
 /// A resolver which uses HTTPS to `dns.google` and HTTPS to arbitrary servers for LN-Address is
 /// provided in
 #[cfg_attr(feature = "http", doc = "[`http_resolver::HTTPHrnResolver`]")]
 #[cfg_attr(not(feature = "http"), doc = "`http_resolver::HTTPHrnResolver`")]
-/// if this crate is built with the `http` feature.
+/// if this crate is built with the `http` feature. Note that using this generally reveals our IP
+/// address to recipients,  as well as potentially who we are paying to Google.
 pub trait HrnResolver {
 	/// Resolves the given Human Readable Name into a [`HrnResolution`] containing a result which
 	/// can be further parsed as payment instructions.

@@ -15,7 +15,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 http = ["reqwest" ,"base64", "dnssec-prover", "std"]
-std = ["lightning/std"]
+std = []
 default = ["std"]
 
 [dependencies]
