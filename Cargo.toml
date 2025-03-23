@@ -1,0 +1,31 @@
+[package]
+name = "bitcoin-payment-instructions"
+version = "0.0.3"
+authors = ["Matt Corallo", "Ben Carman"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lightningdevkit/libbtcwallet/"
+description = """
+A parser for arbitrary bitcoin payment instructions.
+"""
+edition = "2021"
+
+[package.metadata.docs.rs]
+features = ["std", "http"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+http = ["reqwest" ,"base64", "dnssec-prover", "std"]
+std = ["lightning/std"]
+default = ["std"]
+
+[dependencies]
+lightning-invoice = { version = "0.33", default-features = false }
+lightning = { version = "0.1", default-features = false, features = ["dnssec"] }
+bitcoin = { version = "0.32", default-features = false }
+getrandom = { version = "0.3", default-features = false }
+dnssec-prover = { version = "0.6", default-features = false, optional = true, features = ["validation", "std"] }
+reqwest = { version = "0.11", default-features = false, optional = true, features = ["rustls-tls-webpki-roots"] }
+base64 = { version = "0.22", default-features = false, optional = true, features = ["alloc"] }
+
+[dev-dependencies]
+tokio = { version = "1.0", default-features = false, features = ["rt", "macros"] }
