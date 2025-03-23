@@ -12,6 +12,9 @@ use crate::{HrnResolution, HrnResolutionFuture, HrnResolver, HumanReadableName};
 
 /// An [`HrnResolver`] which resolves BIP 353 Human Readable Names to payment instructions using a
 /// configured recursive DNS resolver.
+///
+/// Note that using this reveals who we're paying to the recursive DNS resolver. For improved
+/// privacy, consider proxying the request over Tor.
 pub struct DNSHrnResolver(pub SocketAddr);
 
 impl DNSHrnResolver {

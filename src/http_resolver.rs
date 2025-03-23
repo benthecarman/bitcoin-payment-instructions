@@ -13,6 +13,9 @@ const DOH_ENDPOINT: &'static str = "https://dns.google/dns-query?dns=";
 
 /// An [`HrnResolver`] which uses `reqwest` and `dns.google` (8.8.8.8) to resolve Human Readable
 /// Names into bitcoin payment instructions.
+///
+/// Note that using this may reveal our IP address to the recipient and information about who we're
+/// paying to Google (via `dns.google`).
 pub struct HTTPHrnResolver;
 
 fn query_to_url(query: QueryBuf) -> String {
