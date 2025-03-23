@@ -33,6 +33,11 @@ use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef, ParseOrSeman
 
 pub use lightning::onion_message::dns_resolution::HumanReadableName;
 
+#[cfg(feature = "std")]
+mod dnssec_utils;
+
+#[cfg(feature = "std")]
+pub mod dns_resolver;
 
 #[cfg(feature = "http")]
 pub mod http_resolver;
@@ -579,6 +584,12 @@ pub type HrnResolutionFuture<'a> =
 /// For clients that also support LN-Address, if the BIP 353 resolution fails they should then fall
 /// back to LN-Address to resolve to a Lightning BOLT 11 using HTTP.
 ///
+/// A resolver which uses any (DNSSEC-enabled) recursive DNS resolver to resolve BIP 353 HRNs is
+/// provided in
+#[cfg_attr(feature = "std", doc = "[`dns_resolver::DNSHrnResolver`]")]
+#[cfg_attr(not(feature = "std"), doc = "`dns_resolver::DNSHrnResolver`")]
+/// if the crate is built with the `std` feature. Note that using this reveals who we are paying to
+/// the recursive DNS resolver.
 ///
 /// A resolver which uses HTTPS to `dns.google` and HTTPS to arbitrary servers for LN-Address is
 /// provided in

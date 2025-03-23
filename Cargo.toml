@@ -14,8 +14,8 @@ features = ["std", "http"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-http = ["reqwest" ,"base64", "dnssec-prover", "std"]
-std = []
+http = ["reqwest" ,"base64", "std"]
+std = ["dnssec-prover"]
 default = ["std"]
 
 [dependencies]
@@ -23,7 +23,7 @@ lightning-invoice = { version = "0.33", default-features = false }
 lightning = { version = "0.1", default-features = false, features = ["dnssec"] }
 bitcoin = { version = "0.32", default-features = false }
 getrandom = { version = "0.3", default-features = false }
-dnssec-prover = { version = "0.6", default-features = false, optional = true, features = ["validation", "std"] }
+dnssec-prover = { version = "0.6", default-features = false, optional = true, features = ["validation", "std", "tokio"] }
 reqwest = { version = "0.11", default-features = false, optional = true, features = ["rustls-tls-webpki-roots"] }
 base64 = { version = "0.22", default-features = false, optional = true, features = ["alloc"] }
 

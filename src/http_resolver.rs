@@ -4,10 +4,9 @@
 use std::boxed::Box;
 
 use dnssec_prover::query::{ProofBuilder, QueryBuf};
-use dnssec_prover::rr::{Name, RR, TXT_TYPE};
-use dnssec_prover::ser::parse_rr_stream;
-use dnssec_prover::validation::verify_rr_stream;
+use dnssec_prover::rr::{Name, TXT_TYPE};
 
+use crate::dnssec_utils::resolve_proof;
 use crate::{HrnResolution, HrnResolutionFuture, HrnResolver, HumanReadableName};
 
 const DOH_ENDPOINT: &'static str = "https://dns.google/dns-query?dns=";
@@ -63,30 +62,7 @@ impl HTTPHrnResolver {
 		let err = "Too many queries required to build proof";
 		let proof = proof_builder.finish_proof().map(|(proof, _ttl)| proof).map_err(|()| err)?;
 
-		let rrs = parse_rr_stream(&proof)
-			.map_err(|()| "DNS Proof Builder somehow generated an invalid proof")?;
-		let verified_rrs = verify_rr_stream(&rrs).map_err(|_| "DNSSEC signatures were invalid")?;
-		let resolved_rrs = verified_rrs.resolve_name(&dns_name);
-
-		let mut result = None;
-		for rr in resolved_rrs {
-			match rr {
-				RR::Txt(txt) => {
-					if result.is_some() {
-						return Err("Multiple TXT records existed for the HRN, which is invalid");
-					}
-					result = Some(txt.data.as_vec());
-				},
-				_ => {},
-			}
-		}
-		if let Some(res) = result {
-			let result =
-				String::from_utf8(res).map_err(|_| "TXT record contained an invalid string")?;
-			Ok(HrnResolution { proof: Some(proof), result })
-		} else {
-			Err("No validated TXT record found")
-		}
+		resolve_proof(&dns_name, proof)
 	}
 }
 
