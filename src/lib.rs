@@ -344,14 +344,15 @@ fn parse_resolved_instructions(
 		if let Some(params) = params {
 			for param in params.split('&') {
 				let (k, v) = split_once(param, '=');
-				if k.eq_ignore_ascii_case("bc") || k.eq_ignore_ascii_case("req-bc") {
+
+				let mut parse_segwit = |pfx| {
 					if let Some(address_string) = v {
 						if address_string.len() < 3
-							|| !address_string[..3].eq_ignore_ascii_case("bc1")
+							|| !address_string[..3].eq_ignore_ascii_case(pfx)
 						{
-							// `bc` key-values must only include bech32/bech32m strings with HRP
-							// "bc" (i.e. Segwit addresses).
-							let err = "BIP 321 bitcoin: URI contained a bc instruction which was not a Segwit address (bc1*)";
+							// `bc`/`tb` key-values must only include bech32/bech32m strings with
+							// HRP "bc"/"tb" (i.e. mainnet/testnet Segwit addresses).
+							let err = "BIP 321 bitcoin: URI contained a bc/tb instruction which was not a Segwit address (bc1*/tb1*)";
 							return Err(ParseError::InvalidInstructions(err));
 						}
 						let addr = Address::from_str(address_string)
@@ -363,6 +364,12 @@ fn parse_resolved_instructions(
 						let err = "BIP 321 bitcoin: URI contained a bc (Segwit address) instruction without a value";
 						return Err(ParseError::InvalidInstructions(err));
 					}
+					Ok(())
+				};
+				if k.eq_ignore_ascii_case("bc") || k.eq_ignore_ascii_case("req-bc") {
+					parse_segwit("bc1")?;
+				} else if k.eq_ignore_ascii_case("tb") || k.eq_ignore_ascii_case("req-tb") {
+					parse_segwit("tb1")?;
 				} else if k.eq_ignore_ascii_case("lightning")
 					|| k.eq_ignore_ascii_case("req-lightning")
 				{
