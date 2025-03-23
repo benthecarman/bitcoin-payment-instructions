@@ -25,6 +25,7 @@ use alloc::vec::Vec;
 
 use core::future::Future;
 use core::pin::Pin;
+use core::time::Duration;
 
 use bitcoin::{address, Address, Network};
 use lightning::offers::offer::{self, Offer};
@@ -146,7 +147,8 @@ pub enum ParseError {
 	UnknownRequiredParameter,
 	/// The call to [`HrnResolver::resolve_hrn`] failed with the contained error.
 	HrnResolutionError(&'static str),
-	// TODO: expiry and check it for ln stuff!
+	/// The payment instructions have expired and are no longer payable.
+	InstructionsExpired,
 }
 
 impl PaymentInstructions {
@@ -250,11 +252,27 @@ impl PaymentInstructions {
 	}
 }
 
+fn check_expiry(expiry: Duration) -> Result<(), ParseError> {
+	#[cfg(feature = "std")]
+	{
+		use std::time::SystemTime;
+		if let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+			if now > expiry {
+				return Err(ParseError::InstructionsExpired);
+			}
+		}
+	}
+	Ok(())
+}
+
 fn instructions_from_bolt11(
 	invoice: Bolt11Invoice, network: Network,
 ) -> Result<(Option<String>, impl Iterator<Item = PaymentMethod>), ParseError> {
 	if invoice.network() != network {
 		return Err(ParseError::WrongNetwork);
+	}
+	if let Some(expiry) = invoice.expires_at() {
+		check_expiry(expiry)?;
 	}
 
 	let fallbacks = invoice.fallback_addresses().into_iter();
@@ -368,6 +386,9 @@ fn parse_resolved_instructions(
 							.map_err(|e| ParseError::InvalidBolt12(e))?;
 						if !offer.supports_chain(network.chain_hash()) {
 							return Err(ParseError::WrongNetwork);
+						}
+						if let Some(expiry) = offer.absolute_expiry() {
+							check_expiry(expiry)?;
 						}
 						if let Some(desc) = offer.description() {
 							recipient_description = Some(desc.0.to_owned());
@@ -548,6 +569,9 @@ fn parse_resolved_instructions(
 		} else if let Ok(offer) = Offer::from_str(instructions) {
 			if !offer.supports_chain(network.chain_hash()) {
 				return Err(ParseError::WrongNetwork);
+			}
+			if let Some(expiry) = offer.absolute_expiry() {
+				check_expiry(expiry)?;
 			}
 			Ok(PaymentInstructions {
 				recipient_description: offer.description().map(|s| s.0.to_owned()),

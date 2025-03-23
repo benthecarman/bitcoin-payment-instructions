@@ -21,6 +21,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use core::time::Duration;
+
 /// A method which can be used to receive a payment
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ReceiveMethod {
@@ -47,7 +49,21 @@ pub enum ParseError {
 	UnknownReceiveInstructions,
 	/// The BIP 321 bitcoin: URI included unknown required parameter(s)
 	UnknownRequiredParameter,
-	// TODO: expiry and check it for ln stuff!
+	/// The payment instructions have expired and are no longer payable.
+	InstructionsExpired,
+}
+
+pub(crate) fn check_expiry(expiry: Duration) -> Result<(), ParseError> {
+	#[cfg(feature = "std")]
+	{
+		use std::time::SystemTime;
+		if let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+			if now > expiry {
+				return Err(ParseError::InstructionsExpired);
+			}
+		}
+	}
+	Ok(())
 }
 
 /// Parsed receive instructions representing a set of possible ways to receive, as well as an
@@ -141,6 +157,9 @@ impl ReceiveInstructions {
 		if let Ok(refund) = Refund::from_str(instructions) {
 			if refund.chain() != network.chain_hash() {
 				return Err(ParseError::WrongNetwork);
+			}
+			if let Some(expiry) = refund.absolute_expiry() {
+				check_expiry(expiry)?;
 			}
 
 			return Ok(ReceiveInstructions {
