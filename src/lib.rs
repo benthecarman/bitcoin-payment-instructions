@@ -256,14 +256,19 @@ fn instructions_from_bolt11(
 	if invoice.network() != network {
 		return Err(ParseError::WrongNetwork);
 	}
-	// TODO: Extract fallback address
+
+	let fallbacks = invoice.fallback_addresses().into_iter();
+	// For the on-chain amounts, always round up to the next whole satoshi
+	let amount = invoice.amount_milli_satoshis().map(|a| Amount::from_sats((a + 999) / 1000));
+	let fallbacks = fallbacks.map(move |address| PaymentMethod::OnChain { address, amount });
+
 	if let Bolt11InvoiceDescriptionRef::Direct(desc) = invoice.description() {
 		Ok((
 			Some(desc.as_inner().0.clone()),
-			Some(PaymentMethod::LightningBolt11(invoice)).into_iter(),
+			Some(PaymentMethod::LightningBolt11(invoice)).into_iter().chain(fallbacks),
 		))
 	} else {
-		Ok((None, Some(PaymentMethod::LightningBolt11(invoice)).into_iter()))
+		Ok((None, Some(PaymentMethod::LightningBolt11(invoice)).into_iter().chain(fallbacks)))
 	}
 }
 
