@@ -9,11 +9,17 @@
 //! parse them.
 
 use crate::split_once;
+
 use bitcoin::secp256k1::SecretKey;
 use bitcoin::Network;
+
 use lightning::offers::parse::Bolt12ParseError;
 use lightning::offers::refund::Refund;
-use std::str::FromStr;
+
+use alloc::str::FromStr;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// A method which can be used to receive a payment
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -72,8 +78,7 @@ impl ReceiveInstructions {
 
 	/// Resolves a string into [`ReceiveInstructions`]. Verifying it is valid for the given network
 	pub fn parse_receive_instructions(
-		instructions: &str,
-		network: Network,
+		instructions: &str, network: Network,
 	) -> Result<ReceiveInstructions, ParseError> {
 		if instructions.is_empty() {
 			return Err(ParseError::InvalidInstructions("Empty string"));
@@ -93,16 +98,21 @@ impl ReceiveInstructions {
 				for param in params.split('&') {
 					let (k, v) = split_once(param, '=');
 					if k.eq_ignore_ascii_case("lnr") || k.eq_ignore_ascii_case("req-lnr") {
-						match Refund::from_str(instructions) {
-							Ok(refund) => {
-								if refund.chain() != network.chain_hash() {
-									return Err(ParseError::WrongNetwork);
-								}
+						if let Some(v) = v {
+							match Refund::from_str(v) {
+								Ok(refund) => {
+									if refund.chain() != network.chain_hash() {
+										return Err(ParseError::WrongNetwork);
+									}
 
-								description = Some(refund.description().0.to_string());
-								methods.push(ReceiveMethod::Bolt12Refund(refund));
+									description = Some(refund.description().0.to_string());
+									methods.push(ReceiveMethod::Bolt12Refund(refund));
+								},
+								Err(err) => return Err(ParseError::InvalidBolt12(err)),
 							}
-							Err(err) => return Err(ParseError::InvalidBolt12(err)),
+						} else {
+							let err = "Missing value for a BOLT 12 refund parameter in a BIP 321 bitcoin: URI";
+							return Err(ParseError::InvalidInstructions(err));
 						}
 					} else if k.len() >= 4 && k[..4].eq_ignore_ascii_case("req-") {
 						return Err(ParseError::UnknownRequiredParameter);
@@ -114,14 +124,9 @@ impl ReceiveInstructions {
 				return Err(ParseError::UnknownReceiveInstructions);
 			}
 
-			return Ok(ReceiveInstructions {
-				description,
-				methods,
-			});
+			return Ok(ReceiveInstructions { description, methods });
 		}
 
-		// try to parse private key first, if the first character is an 'L' or 'K' on mainnet or 'c' on testnet
-		// then it may be a valid WIF private key
 		if let Ok(pk) = bitcoin::key::PrivateKey::from_wif(instructions) {
 			if pk.network != network.into() {
 				return Err(ParseError::WrongNetwork);
