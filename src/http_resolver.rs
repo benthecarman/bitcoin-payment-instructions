@@ -3,6 +3,8 @@
 
 use std::boxed::Box;
 
+use serde::Deserialize;
+
 use dnssec_prover::query::{ProofBuilder, QueryBuf};
 use dnssec_prover::rr::{Name, TXT_TYPE};
 
@@ -30,6 +32,26 @@ fn query_to_url(query: QueryBuf) -> String {
 	query_string
 }
 
+#[derive(Deserialize)]
+struct LNURLInitResponse {
+	callback: String,
+	#[serde(rename = "maxSendable")]
+	max_sendable: u64,
+	#[serde(rename = "minSendable")]
+	min_sendable: u64,
+	#[serde(rename = "metadata")]
+	_metadata: String,
+	tag: String,
+}
+
+#[derive(Deserialize)]
+struct LNURLCallbackResponse {
+	pr: String,
+	routes: Vec<String>,
+}
+
+const DNS_ERR: &'static str = "DNS Request to dns.google failed";
+
 impl HTTPHrnResolver {
 	async fn resolve_dns(&self, hrn: &HumanReadableName) -> Result<HrnResolution, &'static str> {
 		let dns_name =
@@ -41,12 +63,10 @@ impl HTTPHrnResolver {
 		while let Some(query) = pending_queries.pop() {
 			let client = reqwest::Client::new();
 
-			let err = "DNS Request to dns.google failed";
-
 			let request_url = query_to_url(query);
 			let req = client.get(request_url).header("accept", "application/dns-message").build();
-			let resp = client.execute(req.map_err(|_| err)?).await.map_err(|_| err)?;
-			let body = resp.bytes().await.map_err(|_| err)?;
+			let resp = client.execute(req.map_err(|_| DNS_ERR)?).await.map_err(|_| DNS_ERR)?;
+			let body = resp.bytes().await.map_err(|_| DNS_ERR)?;
 
 			let mut answer = QueryBuf::new_zeroed(0);
 			answer.extend_from_slice(&body[..]);
@@ -67,14 +87,51 @@ impl HTTPHrnResolver {
 
 		resolve_proof(&dns_name, proof)
 	}
+
+	async fn resolve_lnurl(&self, hrn: &HumanReadableName) -> Result<HrnResolution, &'static str> {
+		let init_url = format!("https://{}/.well-known/lnurlp/{}", hrn.domain(), hrn.user());
+		let err = "Failed to fetch LN-Address initial well-known endpoint";
+		let init: LNURLInitResponse =
+			reqwest::get(init_url).await.map_err(|_| err)?.json().await.map_err(|_| err)?;
+
+		if init.tag != "payRequest" {
+			return Err("LNURL initial init_responseponse had an incorrect tag value");
+		}
+		if init.min_sendable > init.max_sendable {
+			return Err("LNURL initial init_responseponse had no sendable amounts");
+		}
+
+		// LUD-6 requires that we specify a fixed amount here, but we're just trying to resolve the
+		// HRN into payment instructions, not use a fixed amount, so we leave the amount request
+		// out and hope the server gives us an amount-less invoice.
+		let err = "LN-Address callback failed";
+		let callback_response: LNURLCallbackResponse =
+			reqwest::get(init.callback).await.map_err(|_| err)?.json().await.map_err(|_| err)?;
+
+		if !callback_response.routes.is_empty() {
+			return Err("LNURL callback response contained a non-empty routes array");
+		}
+
+		// Technically we're supposed to verify init.metadata matches the BOLT 11 invoice
+		// description hash, but given we're not storing the metadata anywhere, there's not really
+		// much point.
+		Ok(HrnResolution { proof: None, result: callback_response.pr })
+	}
 }
 
 impl HrnResolver for HTTPHrnResolver {
 	fn resolve_hrn<'a>(&'a self, hrn: &'a HumanReadableName) -> HrnResolutionFuture<'a> {
 		Box::pin(async move {
 			// First try to resolve the HRN using BIP 353 DNSSEC proof building
-			self.resolve_dns(hrn).await
-			//TODO: Then try to resolve using LN-Address/LNURL
+			match self.resolve_dns(hrn).await {
+				Ok(r) => Ok(r),
+				Err(e) if e == DNS_ERR => {
+					// If we got an error that might indicate the recipient doesn't support BIP
+					// 353, try LN-Address via LNURL
+					self.resolve_lnurl(hrn).await
+				},
+				Err(e) => Err(e),
+			}
 		})
 	}
 }
