@@ -4,6 +4,8 @@
 //! Thus, here, we define an [`Amount`] type similar to [`bitcoin::Amount`] but with sub-satoshi
 //! precision.
 
+use bitcoin::Amount as BitcoinAmount;
+
 use core::fmt;
 
 /// An amount of Bitcoin
@@ -13,7 +15,6 @@ use core::fmt;
 ///
 /// In general, when displaying amounts to the user, you should use [`Self::sats_rounding_up`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-// TODO: Move this into lightning-types
 pub struct Amount(u64);
 
 impl fmt::Debug for Amount {
@@ -72,7 +73,6 @@ impl Amount {
 		Amount(self.0.saturating_sub(rhs.0))
 	}
 
-
 	/// Returns an object that implements [`core::fmt::Display`] which writes out the amount, in
 	/// bitcoin, with a decimal point between the whole-bitcoin and partial-bitcoin amounts, with
 	/// any milli-satoshis rounded up to the next whole satoshi.
@@ -102,6 +102,12 @@ impl fmt::Display for FormattedAmount {
 			write!(f, ".{:0digits$}", sats, digits = digits)?;
 		}
 		Ok(())
+	}
+}
+
+impl From<BitcoinAmount> for Amount {
+	fn from(amt: BitcoinAmount) -> Amount {
+		Amount(amt.to_sat() * 1000)
 	}
 }
 
