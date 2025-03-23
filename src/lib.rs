@@ -50,7 +50,7 @@ pub mod receive;
 use amount::Amount;
 
 /// A method which can be used to make a payment
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaymentMethod {
 	/// A payment using lightning as descibred by the given BOLT 11 invoice.
 	LightningBolt11(Bolt11Invoice),
@@ -639,7 +639,7 @@ pub trait HrnResolver {
 
 impl PaymentInstructions {
 	/// Resolves a string into [`PaymentInstructions`].
-	pub async fn parse_payment_instructions<H: HrnResolver>(
+	pub async fn parse<H: HrnResolver>(
 		instructions: &str, network: Network, hrn_resolver: H,
 		supports_proof_of_payment_callbacks: bool,
 	) -> Result<PaymentInstructions, ParseError> {

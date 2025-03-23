@@ -43,7 +43,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_http_hrn_resolver() {
-		let instructions = PaymentInstructions::parse_payment_instructions(
+		let instructions = PaymentInstructions::parse(
 			"send.some@satsto.me",
 			bitcoin::Network::Bitcoin,
 			DNSHrnResolver(SocketAddr::from_str("8.8.8.8:53").unwrap()),
