@@ -122,6 +122,7 @@ pub const MAX_AMOUNT_DIFFERENCE: Amount = Amount::from_sats(100);
 
 /// An error when parsing payment instructions into [`PaymentInstructions`].
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub enum ParseError {
 	/// An invalid lightning BOLT 11 invoice was encountered
 	InvalidBolt11(ParseOrSemanticError),
@@ -637,6 +638,16 @@ pub trait HrnResolver {
 	fn resolve_hrn<'a>(&'a self, hrn: &'a HumanReadableName) -> HrnResolutionFuture<'a>;
 }
 
+/// An HRN "resolver" that never succeeds at resolving.
+#[derive(Clone, Copy)]
+pub struct DummyHrnResolver;
+
+impl HrnResolver for DummyHrnResolver {
+	fn resolve_hrn<'a>(&'a self, _hrn: &'a HumanReadableName) -> HrnResolutionFuture<'a> {
+		Box::pin(async { Err("Human Readable Name resolution not supported") })
+	}
+}
+
 impl PaymentInstructions {
 	/// Resolves a string into [`PaymentInstructions`].
 	pub async fn parse<H: HrnResolver>(
@@ -652,5 +663,277 @@ impl PaymentInstructions {
 		} else {
 			parse_resolved_instructions(instructions, network, supports_pops, None, None)
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use alloc::format;
+	use alloc::str::FromStr;
+	use alloc::string::ToString;
+
+	use super::*;
+
+	const SAMPLE_INVOICE_WITH_FALLBACK: &str = "lnbc20m1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsfpp3qjmp7lwpagxun9pygexvgpjdc4jdj85fr9yq20q82gphp2nflc7jtzrcazrra7wwgzxqc8u7754cdlpfrmccae92qgzqvzq2ps8pqqqqqqpqqqqq9qqqvpeuqafqxu92d8lr6fvg0r5gv0heeeqgcrqlnm6jhphu9y00rrhy4grqszsvpcgpy9qqqqqqgqqqqq7qqzq9qrsgqdfjcdk6w3ak5pca9hwfwfh63zrrz06wwfya0ydlzpgzxkn5xagsqz7x9j4jwe7yj7vaf2k9lqsdk45kts2fd0fkr28am0u4w95tt2nsq76cqw0";
+	const SAMPLE_INVOICE: &str = "lnbc20m1pn7qa2ndqqnp4q0d3p2sfluzdx45tqcsh2pu5qc7lgq0xs578ngs6s0s68ua4h7cvspp5kwzshmne5zw3lnfqdk8cv26mg9ndjapqzhcxn2wtn9d6ew5e2jfqsp5h3u5f0l522vs488h6n8zm5ca2lkpva532fnl2kp4wnvsuq445erq9qyysgqcqpcxqppz4395v2sjh3t5pzckgeelk9qf0z3fm9jzxtjqpqygayt4xyy7tpjvq5pe7f6727du2mg3t2tfe0cd53de2027ff7es7smtew8xx5x2spwuvkdz";
+	const SAMPLE_OFFER: &str = "lno1qgs0v8hw8d368q9yw7sx8tejk2aujlyll8cp7tzzyh5h8xyppqqqqqqgqvqcdgq2qenxzatrv46pvggrv64u366d5c0rr2xjc3fq6vw2hh6ce3f9p7z4v4ee0u7avfynjw9q";
+	const SAMPLE_BIP21: &str = "bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?amount=50&label=Luke-Jr&message=Donation%20for%20project%20xyz";
+
+	const SAMPLE_BIP21_WITH_INVOICE: &str = "bitcoin:BC1QYLH3U67J673H6Y6ALV70M0PL2YZ53TZHVXGG7U?amount=0.00001&label=sbddesign%3A%20For%20lunch%20Tuesday&message=For%20lunch%20Tuesday&lightning=LNBC10U1P3PJ257PP5YZTKWJCZ5FTL5LAXKAV23ZMZEKAW37ZK6KMV80PK4XAEV5QHTZ7QDPDWD3XGER9WD5KWM36YPRX7U3QD36KUCMGYP282ETNV3SHJCQZPGXQYZ5VQSP5USYC4LK9CHSFP53KVCNVQ456GANH60D89REYKDNGSMTJ6YW3NHVQ9QYYSSQJCEWM5CJWZ4A6RFJX77C490YCED6PEMK0UPKXHY89CMM7SCT66K8GNEANWYKZGDRWRFJE69H9U5U0W57RRCSYSAS7GADWMZXC8C6T0SPJAZUP6";
+	#[cfg(not(feature = "std"))]
+	const SAMPLE_BIP21_WITH_INVOICE_ADDR: &str = "bc1qylh3u67j673h6y6alv70m0pl2yz53tzhvxgg7u";
+	#[cfg(not(feature = "std"))]
+	const SAMPLE_BIP21_WITH_INVOICE_INVOICE: &str = "lnbc10u1p3pj257pp5yztkwjcz5ftl5laxkav23zmzekaw37zk6kmv80pk4xaev5qhtz7qdpdwd3xger9wd5kwm36yprx7u3qd36kucmgyp282etnv3shjcqzpgxqyz5vqsp5usyc4lk9chsfp53kvcnvq456ganh60d89reykdngsmtj6yw3nhvq9qyyssqjcewm5cjwz4a6rfjx77c490yced6pemk0upkxhy89cmm7sct66k8gneanwykzgdrwrfje69h9u5u0w57rrcsysas7gadwmzxc8c6t0spjazup6";
+
+	const SAMPLE_BIP21_WITH_INVOICE_AND_LABEL: &str = "bitcoin:tb1p0vztr8q25czuka5u4ta5pqu0h8dxkf72mam89cpg4tg40fm8wgmqp3gv99?amount=0.000001&label=yooo&lightning=lntbs1u1pjrww6fdq809hk7mcnp4qvwggxr0fsueyrcer4x075walsv93vqvn3vlg9etesx287x6ddy4xpp5a3drwdx2fmkkgmuenpvmynnl7uf09jmgvtlg86ckkvgn99ajqgtssp5gr3aghgjxlwshnqwqn39c2cz5hw4cnsnzxdjn7kywl40rru4mjdq9qyysgqcqpcxqrpwurzjqfgtsj42x8an5zujpxvfhp9ngwm7u5lu8lvzfucjhex4pq8ysj5q2qqqqyqqv9cqqsqqqqlgqqqqqqqqfqzgl9zq04nzpxyvdr8vj3h98gvnj3luanj2cxcra0q2th4xjsxmtj8k3582l67xq9ffz5586f3nm5ax58xaqjg6rjcj2vzvx2q39v9eqpn0wx54";
+
+	#[tokio::test]
+	async fn parse_address() {
+		let addr_str = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+		let parsed =
+			PaymentInstructions::parse(&addr_str, Network::Bitcoin, DummyHrnResolver, false)
+				.await
+				.unwrap();
+
+		assert_eq!(parsed.methods.len(), 1);
+		assert_eq!(parsed.methods[0].amount(), None);
+		assert_eq!(parsed.recipient_description, None);
+		if let PaymentMethod::OnChain { amount, address } = &parsed.methods[0] {
+			assert_eq!(*amount, None);
+			assert_eq!(*address, Address::from_str(addr_str).unwrap().assume_checked());
+		} else {
+			panic!("Wrong method");
+		}
+	}
+
+	// Test a handful of ways a lightning invoice might be communicated
+	async fn check_ln_invoice(inv: &str) -> Result<PaymentInstructions, ParseError> {
+		assert!(inv.chars().all(|c| c.is_ascii_lowercase() || c.is_digit(10)), "{}", inv);
+		let resolver = DummyHrnResolver;
+		let raw = PaymentInstructions::parse(inv, Network::Bitcoin, resolver, false).await;
+
+		let ln_uri = format!("lightning:{}", inv);
+		let uri = PaymentInstructions::parse(&ln_uri, Network::Bitcoin, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let ln_uri = format!("LIGHTNING:{}", inv);
+		let uri = PaymentInstructions::parse(&ln_uri, Network::Bitcoin, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let ln_uri = ln_uri.to_uppercase();
+		let uri = PaymentInstructions::parse(&ln_uri, Network::Bitcoin, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let btc_uri = format!("bitcoin:?lightning={}", inv);
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Bitcoin, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let btc_uri = btc_uri.to_uppercase();
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Bitcoin, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let btc_uri = format!("bitcoin:?req-lightning={}", inv);
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Bitcoin, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let btc_uri = btc_uri.to_uppercase();
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Bitcoin, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		raw
+	}
+
+	#[cfg(not(feature = "std"))]
+	#[tokio::test]
+	async fn parse_invoice() {
+		let invoice = Bolt11Invoice::from_str(SAMPLE_INVOICE).unwrap();
+		let parsed = check_ln_invoice(SAMPLE_INVOICE).await.unwrap();
+
+		assert_eq!(parsed.methods.len(), 1);
+		assert_eq!(
+			parsed.methods[0].amount(),
+			invoice.amount_milli_satoshis().map(Amount::from_milli_sats),
+		);
+		assert_eq!(parsed.recipient_description, Some(String::new()));
+		assert!(matches!(parsed.methods[0].clone(), PaymentMethod::LightningBolt11(_)));
+	}
+
+	#[cfg(feature = "std")]
+	#[tokio::test]
+	async fn parse_invoice() {
+		assert_eq!(check_ln_invoice(SAMPLE_INVOICE).await, Err(ParseError::InstructionsExpired));
+	}
+
+	#[cfg(not(feature = "std"))]
+	#[tokio::test]
+	async fn parse_invoice_with_fallback() {
+		let invoice = Bolt11Invoice::from_str(SAMPLE_INVOICE_WITH_FALLBACK).unwrap();
+		let parsed = check_ln_invoice(SAMPLE_INVOICE_WITH_FALLBACK).await.unwrap();
+
+		assert_eq!(parsed.methods.len(), 2);
+		assert_eq!(
+			parsed.methods[0].amount(),
+			invoice.amount_milli_satoshis().map(Amount::from_milli_sats),
+		);
+		assert_eq!(
+			parsed.methods[1].amount(),
+			invoice.amount_milli_satoshis().map(Amount::from_milli_sats),
+		);
+
+		assert_eq!(parsed.recipient_description, None); // no description for a description hash
+		let is_bolt11 = |meth: &&PaymentMethod| matches!(meth, &&PaymentMethod::LightningBolt11(_));
+		assert_eq!(parsed.methods.iter().filter(is_bolt11).count(), 1);
+		let is_onchain = |meth: &&PaymentMethod| matches!(meth, &&PaymentMethod::OnChain { .. });
+		assert_eq!(parsed.methods.iter().filter(is_onchain).count(), 1);
+	}
+
+	#[cfg(feature = "std")]
+	#[tokio::test]
+	async fn parse_invoice_with_fallback() {
+		assert_eq!(
+			check_ln_invoice(SAMPLE_INVOICE_WITH_FALLBACK).await,
+			Err(ParseError::InstructionsExpired),
+		);
+	}
+
+	// Test a handful of ways a lightning offer might be communicated
+	async fn check_ln_offer(offer: &str) -> Result<PaymentInstructions, ParseError> {
+		assert!(offer.chars().all(|c| c.is_ascii_lowercase() || c.is_digit(10)), "{}", offer);
+		let resolver = DummyHrnResolver;
+		let raw = PaymentInstructions::parse(offer, Network::Signet, resolver, false).await;
+
+		let btc_uri = format!("bitcoin:?lno={}", offer);
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Signet, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let btc_uri = btc_uri.to_uppercase();
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Signet, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let btc_uri = format!("bitcoin:?req-lno={}", offer);
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Signet, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		let btc_uri = btc_uri.to_uppercase();
+		let uri = PaymentInstructions::parse(&btc_uri, Network::Signet, resolver, false).await;
+		assert_eq!(raw, uri);
+
+		raw
+	}
+
+	#[tokio::test]
+	async fn parse_offer() {
+		let offer = Offer::from_str(SAMPLE_OFFER).unwrap();
+		let amt_msats = match offer.amount() {
+			None => None,
+			Some(offer::Amount::Bitcoin { amount_msats }) => Some(amount_msats),
+			Some(offer::Amount::Currency { .. }) => panic!(),
+		};
+		let parsed = check_ln_offer(SAMPLE_OFFER).await.unwrap();
+
+		assert_eq!(parsed.methods.len(), 1);
+		assert_eq!(parsed.methods[0].amount(), amt_msats.map(Amount::from_milli_sats));
+		assert_eq!(parsed.recipient_description, Some("faucet".to_string()));
+		assert!(matches!(parsed.methods[0].clone(), PaymentMethod::LightningBolt12(_)));
+	}
+
+	#[tokio::test]
+	async fn parse_bip_21() {
+		let parsed =
+			PaymentInstructions::parse(SAMPLE_BIP21, Network::Bitcoin, DummyHrnResolver, false)
+				.await
+				.unwrap();
+
+		assert_eq!(parsed.methods.len(), 1);
+		assert_eq!(parsed.methods[0].amount(), Some(Amount::from_sats(5_000_000_000)));
+		assert_eq!(parsed.recipient_description, None);
+		assert!(matches!(
+			parsed.methods[0].clone(),
+			PaymentMethod::OnChain { amount: Some(_), .. }
+		));
+	}
+
+	#[cfg(not(feature = "std"))]
+	#[tokio::test]
+	async fn parse_bip_21_with_invoice() {
+		let parsed = PaymentInstructions::parse(
+			SAMPLE_BIP21_WITH_INVOICE,
+			Network::Bitcoin,
+			DummyHrnResolver,
+			false,
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(parsed.methods.len(), 2);
+		assert_eq!(parsed.onchain_payment_amount(), Some(Amount::from_milli_sats(1_000_000)));
+		assert_eq!(parsed.ln_payment_amount(), Some(Amount::from_milli_sats(1_000_000)));
+		assert_eq!(parsed.methods[0].amount(), Some(Amount::from_milli_sats(1_000_000)));
+		assert_eq!(parsed.recipient_description, Some("sbddesign: For lunch Tuesday".to_string()));
+		if let PaymentMethod::OnChain { amount, address } = &parsed.methods[0] {
+			assert_eq!(*amount, Some(Amount::from_milli_sats(1_000_000)));
+			assert_eq!(address.to_string(), SAMPLE_BIP21_WITH_INVOICE_ADDR);
+		} else {
+			panic!("Missing on-chain (or order changed)");
+		}
+		if let PaymentMethod::LightningBolt11(inv) = &parsed.methods[1] {
+			assert_eq!(inv.to_string(), SAMPLE_BIP21_WITH_INVOICE_INVOICE);
+		} else {
+			panic!("Missing invoice (or order changed)");
+		}
+	}
+
+	#[cfg(feature = "std")]
+	#[tokio::test]
+	async fn parse_bip_21_with_invoice() {
+		assert_eq!(
+			PaymentInstructions::parse(
+				SAMPLE_BIP21_WITH_INVOICE,
+				Network::Bitcoin,
+				DummyHrnResolver,
+				false,
+			)
+			.await,
+			Err(ParseError::InstructionsExpired),
+		);
+	}
+
+	#[cfg(not(feature = "std"))]
+	#[tokio::test]
+	async fn parse_bip_21_with_invoice_with_label() {
+		let parsed = PaymentInstructions::parse(
+			SAMPLE_BIP21_WITH_INVOICE_AND_LABEL,
+			Network::Signet,
+			DummyHrnResolver,
+			false,
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(parsed.methods.len(), 2);
+		assert_eq!(parsed.onchain_payment_amount(), Some(Amount::from_milli_sats(100_000)));
+		assert_eq!(parsed.ln_payment_amount(), Some(Amount::from_milli_sats(100_000)));
+		assert_eq!(parsed.methods[0].amount(), Some(Amount::from_milli_sats(100_000)));
+		assert_eq!(parsed.recipient_description, Some("yooo".to_string()));
+		assert!(matches!(
+			parsed.methods[0].clone(),
+			PaymentMethod::OnChain { amount: Some(_), .. }
+		));
+		assert!(matches!(parsed.methods[1].clone(), PaymentMethod::LightningBolt11(_)));
+	}
+
+	#[cfg(feature = "std")]
+	#[tokio::test]
+	async fn parse_bip_21_with_invoice_with_label() {
+		assert_eq!(
+			PaymentInstructions::parse(
+				SAMPLE_BIP21_WITH_INVOICE_AND_LABEL,
+				Network::Signet,
+				DummyHrnResolver,
+				false,
+			)
+			.await,
+			Err(ParseError::InstructionsExpired),
+		);
 	}
 }
