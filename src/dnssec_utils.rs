@@ -22,18 +22,15 @@ pub fn resolve_proof(dns_name: &Name, proof: Vec<u8>) -> Result<HrnResolution, &
 		return Err("Some DNSSEC records are expired. Check your system clock.");
 	}
 
-	let resolved_rrs = verified_rrs.resolve_name(&dns_name);
+	let resolved_rrs = verified_rrs.resolve_name(dns_name);
 
 	let mut result = None;
 	for rr in resolved_rrs {
-		match rr {
-			RR::Txt(txt) => {
-				if result.is_some() {
-					return Err("Multiple TXT records existed for the HRN, which is invalid");
-				}
-				result = Some(txt.data.as_vec());
-			},
-			_ => {},
+		if let RR::Txt(txt) = rr {
+			if result.is_some() {
+				return Err("Multiple TXT records existed for the HRN, which is invalid");
+			}
+			result = Some(txt.data.as_vec());
 		}
 	}
 	if let Some(res) = result {

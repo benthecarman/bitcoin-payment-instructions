@@ -80,7 +80,7 @@ impl PaymentMethod {
 	pub fn amount(&self) -> Option<Amount> {
 		match self {
 			PaymentMethod::LightningBolt11(invoice) => {
-				invoice.amount_milli_satoshis().map(|a| Amount::from_milli_sats(a))
+				invoice.amount_milli_satoshis().map(Amount::from_milli_sats)
 			},
 			PaymentMethod::LightningBolt12(offer) => match offer.amount() {
 				Some(offer::Amount::Bitcoin { amount_msats }) => {
@@ -220,7 +220,7 @@ impl PaymentInstructions {
 	///  * the `description` field in a lightning BOLT 11 invoice
 	///  * the `description` field in a lightning BOLT 12 offer
 	pub fn recipient_description(&self) -> Option<&str> {
-		self.recipient_description.as_ref().map(|x| &**x)
+		self.recipient_description.as_ref().map(|d| d.as_str())
 	}
 
 	/// Fetches the proof-of-payment callback URI.
@@ -230,7 +230,7 @@ impl PaymentInstructions {
 	/// not-yet-defined for lightning BOLT 12 invoices) must be appended to this URI and the URI
 	/// opened with the default system URI handler.
 	pub fn pop_callback(&self) -> Option<&str> {
-		self.pop_callback.as_ref().map(|x| &**x)
+		self.pop_callback.as_ref().map(|c| c.as_str())
 	}
 
 	/// Fetches the [`HumanReadableName`] which was resolved, if the resolved payment instructions
@@ -301,12 +301,12 @@ fn un_percent_encode(encoded: &str) -> Result<String, ParseError> {
 	let err = "A Proof of Payment URI was not properly %-encoded in a BIP 321 bitcoin: URI";
 	while let Some(b) = iter.next() {
 		if b == b'%' {
-			let high = iter.next().ok_or(ParseError::InvalidInstructions(err))? as u8;
+			let high = iter.next().ok_or(ParseError::InvalidInstructions(err))?;
 			let low = iter.next().ok_or(ParseError::InvalidInstructions(err))?;
-			if high > b'9' || high < b'0' || low > b'9' || low < b'0' {
+			if !high.is_ascii_digit() || !low.is_ascii_digit() {
 				return Err(ParseError::InvalidInstructions(err));
 			}
-			res.push((high - b'0') << 4 | (low - b'0'));
+			res.push(((high - b'0') << 4) | (low - b'0'));
 		} else {
 			res.push(b);
 		}
@@ -337,7 +337,7 @@ fn parse_resolved_instructions(
 		let mut recipient_description = None;
 		let mut pop_callback = None;
 		if !body.is_empty() {
-			let addr = Address::from_str(body).map_err(|e| ParseError::InvalidOnChain(e))?;
+			let addr = Address::from_str(body).map_err(ParseError::InvalidOnChain)?;
 			let address = addr.require_network(network).map_err(|_| ParseError::WrongNetwork)?;
 			methods.push(PaymentMethod::OnChain { amount: None, address });
 		}
@@ -355,7 +355,7 @@ fn parse_resolved_instructions(
 							return Err(ParseError::InvalidInstructions(err));
 						}
 						let addr = Address::from_str(address_string)
-							.map_err(|e| ParseError::InvalidOnChain(e))?;
+							.map_err(ParseError::InvalidOnChain)?;
 						let address =
 							addr.require_network(network).map_err(|_| ParseError::WrongNetwork)?;
 						methods.push(PaymentMethod::OnChain { amount: None, address });
@@ -368,7 +368,7 @@ fn parse_resolved_instructions(
 				{
 					if let Some(invoice_string) = v {
 						let invoice = Bolt11Invoice::from_str(invoice_string)
-							.map_err(|e| ParseError::InvalidBolt11(e))?;
+							.map_err(ParseError::InvalidBolt11)?;
 						let (desc, method_iter) = instructions_from_bolt11(invoice, network)?;
 						if let Some(desc) = desc {
 							recipient_description = Some(desc);
@@ -382,8 +382,8 @@ fn parse_resolved_instructions(
 					}
 				} else if k.eq_ignore_ascii_case("lno") || k.eq_ignore_ascii_case("req-lno") {
 					if let Some(offer_string) = v {
-						let offer = Offer::from_str(offer_string)
-							.map_err(|e| ParseError::InvalidBolt12(e))?;
+						let offer =
+							Offer::from_str(offer_string).map_err(ParseError::InvalidBolt12)?;
 						if !offer.supports_chain(network.chain_hash()) {
 							return Err(ParseError::WrongNetwork);
 						}
@@ -538,7 +538,7 @@ fn parse_resolved_instructions(
 		// Though there is no specification, lightning: URIs generally only include BOLT 11
 		// invoices.
 		let invoice = Bolt11Invoice::from_str(&instructions[LN_URI_PFX_LEN..])
-			.map_err(|e| ParseError::InvalidBolt11(e))?;
+			.map_err(ParseError::InvalidBolt11)?;
 		let (recipient_description, method_iter) = instructions_from_bolt11(invoice, network)?;
 		Ok(PaymentInstructions {
 			recipient_description,
@@ -547,42 +547,40 @@ fn parse_resolved_instructions(
 			hrn,
 			hrn_proof,
 		})
-	} else {
-		if let Ok(addr) = Address::from_str(instructions) {
-			let address = addr.require_network(network).map_err(|_| ParseError::WrongNetwork)?;
-			Ok(PaymentInstructions {
-				recipient_description: None,
-				methods: vec![PaymentMethod::OnChain { amount: None, address }],
-				pop_callback: None,
-				hrn,
-				hrn_proof,
-			})
-		} else if let Ok(invoice) = Bolt11Invoice::from_str(instructions) {
-			let (recipient_description, method_iter) = instructions_from_bolt11(invoice, network)?;
-			Ok(PaymentInstructions {
-				recipient_description,
-				methods: method_iter.collect(),
-				pop_callback: None,
-				hrn,
-				hrn_proof,
-			})
-		} else if let Ok(offer) = Offer::from_str(instructions) {
-			if !offer.supports_chain(network.chain_hash()) {
-				return Err(ParseError::WrongNetwork);
-			}
-			if let Some(expiry) = offer.absolute_expiry() {
-				check_expiry(expiry)?;
-			}
-			Ok(PaymentInstructions {
-				recipient_description: offer.description().map(|s| s.0.to_owned()),
-				methods: vec![PaymentMethod::LightningBolt12(offer)],
-				pop_callback: None,
-				hrn,
-				hrn_proof,
-			})
-		} else {
-			Err(ParseError::UnknownPaymentInstructions)
+	} else if let Ok(addr) = Address::from_str(instructions) {
+		let address = addr.require_network(network).map_err(|_| ParseError::WrongNetwork)?;
+		Ok(PaymentInstructions {
+			recipient_description: None,
+			methods: vec![PaymentMethod::OnChain { amount: None, address }],
+			pop_callback: None,
+			hrn,
+			hrn_proof,
+		})
+	} else if let Ok(invoice) = Bolt11Invoice::from_str(instructions) {
+		let (recipient_description, method_iter) = instructions_from_bolt11(invoice, network)?;
+		Ok(PaymentInstructions {
+			recipient_description,
+			methods: method_iter.collect(),
+			pop_callback: None,
+			hrn,
+			hrn_proof,
+		})
+	} else if let Ok(offer) = Offer::from_str(instructions) {
+		if !offer.supports_chain(network.chain_hash()) {
+			return Err(ParseError::WrongNetwork);
 		}
+		if let Some(expiry) = offer.absolute_expiry() {
+			check_expiry(expiry)?;
+		}
+		Ok(PaymentInstructions {
+			recipient_description: offer.description().map(|s| s.0.to_owned()),
+			methods: vec![PaymentMethod::LightningBolt12(offer)],
+			pop_callback: None,
+			hrn,
+			hrn_proof,
+		})
+	} else {
+		Err(ParseError::UnknownPaymentInstructions)
 	}
 }
 
@@ -641,7 +639,7 @@ impl PaymentInstructions {
 		let supports_pops = supports_proof_of_payment_callbacks;
 		if let Ok(hrn) = HumanReadableName::from_encoded(instructions) {
 			let resolution = hrn_resolver.resolve_hrn(&hrn).await;
-			let resolution = resolution.map_err(|e| ParseError::HrnResolutionError(e))?;
+			let resolution = resolution.map_err(ParseError::HrnResolutionError)?;
 			let res = &resolution.result;
 			parse_resolved_instructions(res, network, supports_pops, Some(hrn), resolution.proof)
 		} else {
