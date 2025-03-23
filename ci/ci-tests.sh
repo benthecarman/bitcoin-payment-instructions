@@ -11,7 +11,7 @@ export RUST_BACKTRACE=1
 
 cargo check --verbose --color always
 cargo check --release --verbose --color always
-cargo test
+cargo test --no-default-features
 [ "$RUSTC_MINOR_VERSION" -gt 81 ] && cargo test --features http
 cargo test --features std
 [ "$RUSTC_MINOR_VERSION" -gt 81 ] && cargo doc --document-private-items --no-default-features

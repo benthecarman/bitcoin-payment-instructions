@@ -252,12 +252,12 @@ impl PaymentInstructions {
 	}
 }
 
-fn check_expiry(expiry: Duration) -> Result<(), ParseError> {
+fn check_expiry(_expiry: Duration) -> Result<(), ParseError> {
 	#[cfg(feature = "std")]
 	{
 		use std::time::SystemTime;
 		if let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-			if now > expiry {
+			if now > _expiry {
 				return Err(ParseError::InstructionsExpired);
 			}
 		}

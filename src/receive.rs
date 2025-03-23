@@ -17,7 +17,7 @@ use lightning::offers::parse::Bolt12ParseError;
 use lightning::offers::refund::Refund;
 
 use alloc::str::FromStr;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -53,12 +53,12 @@ pub enum ParseError {
 	InstructionsExpired,
 }
 
-pub(crate) fn check_expiry(expiry: Duration) -> Result<(), ParseError> {
+pub(crate) fn check_expiry(_expiry: Duration) -> Result<(), ParseError> {
 	#[cfg(feature = "std")]
 	{
 		use std::time::SystemTime;
 		if let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-			if now > expiry {
+			if now > _expiry {
 				return Err(ParseError::InstructionsExpired);
 			}
 		}
