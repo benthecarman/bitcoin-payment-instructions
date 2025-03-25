@@ -417,6 +417,10 @@ fn parse_resolved_instructions(
 					if k.eq_ignore_ascii_case("req-pop") && !supports_proof_of_payment_callbacks {
 						return Err(ParseError::UnknownRequiredParameter);
 					}
+					if pop_callback.is_some() {
+						let err = "Multiple proof of payment callbacks appeared in a BIP 321 bitcoin: URI";
+						return Err(ParseError::InvalidInstructions(err));
+					}
 					if let Some(v) = v {
 						let callback_uri = un_percent_encode(v)?;
 						let (proto, _) = split_once(&callback_uri, ':');
