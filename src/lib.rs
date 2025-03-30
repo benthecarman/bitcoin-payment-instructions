@@ -466,8 +466,7 @@ fn instructions_from_bolt11(
 		check_expiry(expiry)?;
 	}
 
-	let fallbacks = invoice.fallback_addresses().into_iter();
-	let fallbacks = fallbacks.map(move |address| PaymentMethod::OnChain(address));
+	let fallbacks = invoice.fallback_addresses().into_iter().map(PaymentMethod::OnChain);
 
 	let mut fallbacks_amt = None;
 	if !invoice.fallbacks().is_empty() {
@@ -738,12 +737,10 @@ fn parse_resolved_instructions(
 						},
 						PaymentMethod::OnChain(_) => {},
 					}
+				} else if method.has_fixed_amount() {
+					have_non_btc_denominated_method = true;
 				} else {
-					if method.has_fixed_amount() {
-						have_non_btc_denominated_method = true;
-					} else {
-						have_amountless_method = true;
-					}
+					have_amountless_method = true;
 				}
 			}
 			if have_amountless_method && have_non_btc_denominated_method {
@@ -780,6 +777,7 @@ fn parse_resolved_instructions(
 				}))
 			}
 		} else {
+			// No parameters were provided, so we just have the on-chain address in the URI body.
 			if methods.is_empty() {
 				Err(ParseError::UnknownPaymentInstructions)
 			} else {

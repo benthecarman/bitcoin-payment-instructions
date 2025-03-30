@@ -8,5 +8,6 @@ RUSTFLAGS='-D warnings' cargo clippy -- \
 	-A clippy::result-unit-err \
 	-A clippy::large-enum-variant \
 	-A clippy::if-same-then-else \
+	-A clippy::needless-lifetimes \
 	`# This doesn't actually work sometimes` \
 	-A clippy::option-as-ref-deref
