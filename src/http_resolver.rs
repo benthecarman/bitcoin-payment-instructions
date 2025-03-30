@@ -31,14 +31,47 @@ const DOH_ENDPOINT: &'static str = "https://dns.google/dns-query?dns=";
 /// paying to Google (via `dns.google`).
 pub struct HTTPHrnResolver;
 
+const B64_CHAR: [u8; 64] = [
+	b'A', b'B', b'C', b'D', b'E', b'F', b'G', b'H', b'I', b'J', b'K', b'L', b'M', b'N', b'O', b'P',
+	b'Q', b'R', b'S', b'T', b'U', b'V', b'W', b'X', b'Y', b'Z', b'a', b'b', b'c', b'd', b'e', b'f',
+	b'g', b'h', b'i', b'j', b'k', b'l', b'm', b'n', b'o', b'p', b'q', b'r', b's', b't', b'u', b'v',
+	b'w', b'x', b'y', b'z', b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'+', b'/',
+];
+
+#[rustfmt::skip]
+fn write_base64(mut bytes: &[u8], out: &mut String) {
+	while bytes.len() >= 3 {
+		let (byte_a, byte_b, byte_c) = (bytes[0] as usize, bytes[1] as usize, bytes[2] as usize);
+		out.push(B64_CHAR[ (byte_a & 0b1111_1100) >> 2] as char);
+		out.push(B64_CHAR[((byte_a & 0b0000_0011) << 4) | ((byte_b & 0b1111_0000) >> 4)] as char);
+		out.push(B64_CHAR[((byte_b & 0b0000_1111) << 2) | ((byte_c & 0b1100_0000) >> 6)] as char);
+		out.push(B64_CHAR[  byte_c & 0b0011_1111] as char);
+		bytes = &bytes[3..];
+	}
+	match bytes.len() {
+		2 => {
+			let (byte_a, byte_b, byte_c) = (bytes[0] as usize, bytes[1] as usize, 0usize);
+			out.push(B64_CHAR[ (byte_a & 0b1111_1100) >> 2] as char);
+			out.push(B64_CHAR[((byte_a & 0b0000_0011) << 4) | ((byte_b & 0b1111_0000) >> 4)] as char);
+			out.push(B64_CHAR[((byte_b & 0b0000_1111) << 2) | ((byte_c & 0b1100_0000) >> 6)] as char);
+		},
+		1 => {
+			let (byte_a, byte_b) = (bytes[0] as usize, 0usize);
+			out.push(B64_CHAR[ (byte_a & 0b1111_1100) >> 2] as char);
+			out.push(B64_CHAR[((byte_a & 0b0000_0011) << 4) | ((byte_b & 0b1111_0000) >> 4)] as char);
+		},
+		_ => debug_assert_eq!(bytes.len(), 0),
+	}
+}
+
 fn query_to_url(query: QueryBuf) -> String {
-	let base64_len = base64::encoded_len(query.len(), true)
-		.expect("Queries should fit in a usize-len base64 string");
+	let base64_len = (query.len() * 8 + 5) / 6;
 	let mut query_string = String::with_capacity(base64_len + DOH_ENDPOINT.len());
 
 	query_string += DOH_ENDPOINT;
-	use base64::Engine;
-	base64::engine::general_purpose::STANDARD_NO_PAD.encode_string(&query[..], &mut query_string);
+	write_base64(&query[..], &mut query_string);
+
+	debug_assert_eq!(query_string.len(), base64_len + DOH_ENDPOINT.len());
 
 	query_string
 }
@@ -190,6 +223,31 @@ impl HrnResolver for HTTPHrnResolver {
 mod tests {
 	use super::*;
 	use crate::*;
+
+	fn to_base64(bytes: &[u8]) -> String {
+		let expected_len = (bytes.len() * 8 + 5) / 6;
+		let mut res = String::with_capacity(expected_len);
+		write_base64(bytes, &mut res);
+		assert_eq!(res.len(), expected_len);
+		res
+	}
+
+	#[test]
+	fn test_base64() {
+		// RFC 4648
+		assert_eq!(&to_base64(b"f"), "Zg");
+		assert_eq!(&to_base64(b"fo"), "Zm8");
+		assert_eq!(&to_base64(b"foo"), "Zm9v");
+		assert_eq!(&to_base64(b"foob"), "Zm9vYg");
+		assert_eq!(&to_base64(b"fooba"), "Zm9vYmE");
+		assert_eq!(&to_base64(b"foobar"), "Zm9vYmFy");
+		// Wikipedia
+		assert_eq!(
+			&to_base64(b"Many hands make light work."),
+			"TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"
+		);
+		assert_eq!(&to_base64(b"Man"), "TWFu");
+	}
 
 	#[tokio::test]
 	async fn test_dns_via_http_hrn_resolver() {
