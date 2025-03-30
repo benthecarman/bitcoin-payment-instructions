@@ -26,7 +26,7 @@ impl fmt::Debug for Amount {
 impl Amount {
 	/// The amount in milli-satoshis
 	#[inline]
-	pub const fn msats(&self) -> u64 {
+	pub const fn milli_sats(&self) -> u64 {
 		self.0
 	}
 

@@ -4,7 +4,7 @@ use dnssec_prover::validation::verify_rr_stream;
 
 use std::time::SystemTime;
 
-use crate::HrnResolution;
+use crate::hrn_resolution::HrnResolution;
 
 pub fn resolve_proof(dns_name: &Name, proof: Vec<u8>) -> Result<HrnResolution, &'static str> {
 	let rrs = parse_rr_stream(&proof)
@@ -36,7 +36,7 @@ pub fn resolve_proof(dns_name: &Name, proof: Vec<u8>) -> Result<HrnResolution, &
 	if let Some(res) = result {
 		let result =
 			String::from_utf8(res).map_err(|_| "TXT record contained an invalid string")?;
-		Ok(HrnResolution { proof: Some(proof), result })
+		Ok(HrnResolution::DNSSEC { proof: Some(proof), result })
 	} else {
 		Err("No validated TXT record found")
 	}

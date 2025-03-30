@@ -7,8 +7,12 @@ use std::net::SocketAddr;
 use dnssec_prover::query::build_txt_proof_async;
 use dnssec_prover::rr::Name;
 
+use crate::amount::Amount;
 use crate::dnssec_utils::resolve_proof;
-use crate::{HrnResolution, HrnResolutionFuture, HrnResolver, HumanReadableName};
+use crate::hrn::HumanReadableName;
+use crate::hrn_resolution::{
+	HrnResolution, HrnResolutionFuture, HrnResolver, LNURLResolutionFuture,
+};
 
 /// An [`HrnResolver`] which resolves BIP 353 Human Readable Names to payment instructions using a
 /// configured recursive DNS resolver.
@@ -34,6 +38,12 @@ impl HrnResolver for DNSHrnResolver {
 	fn resolve_hrn<'a>(&'a self, hrn: &'a HumanReadableName) -> HrnResolutionFuture<'a> {
 		Box::pin(async move { self.resolve_dns(hrn).await })
 	}
+
+	fn resolve_lnurl<'a>(&'a self, _: String, _: Amount, _: [u8; 32]) -> LNURLResolutionFuture<'a> {
+		let err = "resolve_lnurl shouldn't be called when we don't reoslve LNURL";
+		debug_assert!(false, "{}", err);
+		Box::pin(async move { Err(err) })
+	}
 }
 
 #[cfg(test)]
@@ -43,25 +53,40 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_http_hrn_resolver() {
+		let resolver = DNSHrnResolver(SocketAddr::from_str("8.8.8.8:53").unwrap());
 		let instructions = PaymentInstructions::parse(
 			"send.some@satsto.me",
 			bitcoin::Network::Bitcoin,
-			DNSHrnResolver(SocketAddr::from_str("8.8.8.8:53").unwrap()),
+			&resolver,
 			true,
 		)
 		.await
 		.unwrap();
 
-		assert_eq!(instructions.max_amount(), None);
-		assert_eq!(instructions.pop_callback(), None);
-		assert!(instructions.bip_353_dnssec_proof().is_some());
+		let resolved = if let PaymentInstructions::ConfigurableAmount(instr) = instructions {
+			assert_eq!(instr.min_amt(), None);
+			assert_eq!(instr.max_amt(), None);
 
-		let hrn = instructions.human_readable_name().as_ref().unwrap();
+			assert_eq!(instr.pop_callback(), None);
+			assert!(instr.bip_353_dnssec_proof().is_some());
+
+			let hrn = instr.human_readable_name().as_ref().unwrap();
+			assert_eq!(hrn.user(), "send.some");
+			assert_eq!(hrn.domain(), "satsto.me");
+
+			instr.set_amount(Amount::from_sats(100_000), &resolver).await.unwrap()
+		} else {
+			panic!();
+		};
+
+		assert_eq!(resolved.pop_callback(), None);
+		assert!(resolved.bip_353_dnssec_proof().is_some());
+
+		let hrn = resolved.human_readable_name().as_ref().unwrap();
 		assert_eq!(hrn.user(), "send.some");
 		assert_eq!(hrn.domain(), "satsto.me");
 
-		for method in instructions.methods() {
-			assert_eq!(method.amount(), None);
+		for method in resolved.methods() {
 			match method {
 				PaymentMethod::LightningBolt11(_) => {
 					panic!("Should only have static payment instructions");
