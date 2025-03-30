@@ -524,13 +524,10 @@ fn parse_resolved_instructions(
 	instructions: &str, network: Network, supports_proof_of_payment_callbacks: bool,
 	hrn: Option<HumanReadableName>, hrn_proof: Option<Vec<u8>>,
 ) -> Result<PaymentInstructions, ParseError> {
-	const BTC_URI_PFX_LEN: usize = "bitcoin:".len();
-	const LN_URI_PFX_LEN: usize = "lightning:".len();
+	let (uri_proto, uri_suffix) = split_once(instructions, ':');
 
-	if instructions.len() >= BTC_URI_PFX_LEN
-		&& instructions[..BTC_URI_PFX_LEN].eq_ignore_ascii_case("bitcoin:")
-	{
-		let (body, params) = split_once(&instructions[BTC_URI_PFX_LEN..], '?');
+	if uri_proto.eq_ignore_ascii_case("bitcoin") {
+		let (body, params) = split_once(uri_suffix.unwrap_or(""), '?');
 		let mut methods = Vec::new();
 		let mut description = None;
 		let mut pop_callback = None;
@@ -546,8 +543,8 @@ fn parse_resolved_instructions(
 
 				let mut parse_segwit = |pfx| {
 					if let Some(address_string) = v {
-						if address_string.len() < 3
-							|| !address_string[..3].eq_ignore_ascii_case(pfx)
+						if address_string.is_char_boundary(3)
+							&& !address_string[..3].eq_ignore_ascii_case(pfx)
 						{
 							// `bc`/`tb` key-values must only include bech32/bech32m strings with
 							// HRP "bc"/"tb" (i.e. mainnet/testnet Segwit addresses).
@@ -651,7 +648,7 @@ fn parse_resolved_instructions(
 						let err = "Missing value for a Proof of Payment instruction in a BIP 321 bitcoin: URI";
 						return Err(ParseError::InvalidInstructions(err));
 					}
-				} else if k.len() >= 4 && k[..4].eq_ignore_ascii_case("req-") {
+				} else if k.is_char_boundary(4) && k[..4].eq_ignore_ascii_case("req-") {
 					return Err(ParseError::UnknownRequiredParameter);
 				}
 			}
@@ -796,13 +793,11 @@ fn parse_resolved_instructions(
 				}))
 			}
 		}
-	} else if instructions.len() >= LN_URI_PFX_LEN
-		&& instructions[..LN_URI_PFX_LEN].eq_ignore_ascii_case("lightning:")
-	{
+	} else if uri_proto.eq_ignore_ascii_case("lightning") {
 		// Though there is no specification, lightning: URIs generally only include BOLT 11
 		// invoices.
-		let invoice = Bolt11Invoice::from_str(&instructions[LN_URI_PFX_LEN..])
-			.map_err(ParseError::InvalidBolt11)?;
+		let invoice =
+			Bolt11Invoice::from_str(uri_suffix.unwrap_or("")).map_err(ParseError::InvalidBolt11)?;
 		let ln_amt = invoice.amount_milli_satoshis().map(Amount::from_milli_sats);
 		let (description, onchain_amt, method_iter) = instructions_from_bolt11(invoice, network)?;
 		let inner = PaymentInstructionsImpl {
