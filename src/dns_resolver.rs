@@ -1,5 +1,5 @@
-//! A [`HrnResolver`] which uses `reqwest` and `dns.google` (8.8.8.8) to resolve Human Readable
-//! Names into bitcoin payment instructions.
+//! A [`HrnResolver`] which uses any recursive DNS resolver to resolve Human Readable Names into
+//! bitcoin payment instructions.
 
 use std::boxed::Box;
 use std::net::SocketAddr;
