@@ -23,7 +23,15 @@ impl fmt::Debug for Amount {
 	}
 }
 
+const MAX_MSATS: u64 = 21_000_000_0000_0000_000;
+
 impl Amount {
+	/// The maximum possible [`Amount`], equal to 21 million BTC
+	pub const MAX: Amount = Amount(MAX_MSATS);
+
+	/// Zero milli-satoshis
+	pub const ZERO: Amount = Amount(0);
+
 	/// The amount in milli-satoshis
 	#[inline]
 	pub const fn milli_sats(&self) -> u64 {
@@ -47,20 +55,39 @@ impl Amount {
 	}
 
 	/// Constructs a new [`Amount`] for the given number of milli-satoshis.
+	///
+	/// Fails only if `msats` is greater than 21 million Bitcoin (in milli-satoshis).
 	#[inline]
-	pub const fn from_milli_sats(msats: u64) -> Self {
-		Amount(msats)
+	pub const fn from_milli_sats(msats: u64) -> Result<Self, ()> {
+		if msats > MAX_MSATS {
+			Err(())
+		} else {
+			Ok(Amount(msats))
+		}
 	}
 
 	/// Constructs a new [`Amount`] for the given number of satoshis.
+	///
+	/// Fails only if `sats` is greater than 21 million Bitcoin (in satoshis).
 	#[inline]
-	pub const fn from_sats(sats: u64) -> Self {
-		Amount(sats * 1000)
+	pub const fn from_sats(sats: u64) -> Result<Self, ()> {
+		Self::from_milli_sats(sats.saturating_mul(1000))
+	}
+
+	/// Constructs a new [`Amount`] for the given number of satoshis, panicking if the amount is
+	/// too large.
+	pub(crate) const fn from_sats_panicy(sats: u64) -> Self {
+		let amt = sats.saturating_mul(1000);
+		if amt > MAX_MSATS {
+			panic!("Sats value greater than 21 million Bitcoin");
+		} else {
+			Amount(amt)
+		}
 	}
 
 	/// Adds an [`Amount`] to this [`Amount`], saturating to avoid overflowing 21 million bitcoin.
 	#[inline]
-	pub fn saturating_add(self, rhs: Amount) -> Amount {
+	pub const fn saturating_add(self, rhs: Amount) -> Amount {
 		match self.0.checked_add(rhs.0) {
 			Some(amt) if amt <= 21_000_000_0000_0000_000 => Amount(amt),
 			_ => Amount(21_000_000_0000_0000_000),
@@ -69,7 +96,7 @@ impl Amount {
 
 	/// Subtracts an [`Amount`] from this [`Amount`], saturating to avoid underflowing.
 	#[inline]
-	pub fn saturating_sub(self, rhs: Amount) -> Amount {
+	pub const fn saturating_sub(self, rhs: Amount) -> Amount {
 		Amount(self.0.saturating_sub(rhs.0))
 	}
 
@@ -120,15 +147,15 @@ mod test {
 	#[test]
 	#[rustfmt::skip]
 	fn test_display() {
-		assert_eq!(Amount::from_milli_sats(0).btc_decimal_rounding_up_to_sats().to_string(),     "0");
-		assert_eq!(Amount::from_milli_sats(1).btc_decimal_rounding_up_to_sats().to_string(),     "0.00000001");
-		assert_eq!(Amount::from_sats(1).btc_decimal_rounding_up_to_sats().to_string(),           "0.00000001");
-		assert_eq!(Amount::from_sats(10).btc_decimal_rounding_up_to_sats().to_string(),          "0.0000001");
-		assert_eq!(Amount::from_sats(15).btc_decimal_rounding_up_to_sats().to_string(),          "0.00000015");
-		assert_eq!(Amount::from_sats(1_0000).btc_decimal_rounding_up_to_sats().to_string(),      "0.0001");
-		assert_eq!(Amount::from_sats(1_2345).btc_decimal_rounding_up_to_sats().to_string(),      "0.00012345");
-		assert_eq!(Amount::from_sats(1_2345_6789).btc_decimal_rounding_up_to_sats().to_string(), "1.23456789");
-		assert_eq!(Amount::from_sats(1_0000_0000).btc_decimal_rounding_up_to_sats().to_string(), "1");
-		assert_eq!(Amount::from_sats(5_0000_0000).btc_decimal_rounding_up_to_sats().to_string(), "5");
+		assert_eq!(Amount::from_milli_sats(0).unwrap().btc_decimal_rounding_up_to_sats().to_string(),     "0");
+		assert_eq!(Amount::from_milli_sats(1).unwrap().btc_decimal_rounding_up_to_sats().to_string(),     "0.00000001");
+		assert_eq!(Amount::from_sats(1).unwrap().btc_decimal_rounding_up_to_sats().to_string(),           "0.00000001");
+		assert_eq!(Amount::from_sats(10).unwrap().btc_decimal_rounding_up_to_sats().to_string(),          "0.0000001");
+		assert_eq!(Amount::from_sats(15).unwrap().btc_decimal_rounding_up_to_sats().to_string(),          "0.00000015");
+		assert_eq!(Amount::from_sats(1_0000).unwrap().btc_decimal_rounding_up_to_sats().to_string(),      "0.0001");
+		assert_eq!(Amount::from_sats(1_2345).unwrap().btc_decimal_rounding_up_to_sats().to_string(),      "0.00012345");
+		assert_eq!(Amount::from_sats(1_2345_6789).unwrap().btc_decimal_rounding_up_to_sats().to_string(), "1.23456789");
+		assert_eq!(Amount::from_sats(1_0000_0000).unwrap().btc_decimal_rounding_up_to_sats().to_string(), "1");
+		assert_eq!(Amount::from_sats(5_0000_0000).unwrap().btc_decimal_rounding_up_to_sats().to_string(), "5");
 	}
 }

@@ -157,8 +157,9 @@ impl HTTPHrnResolver {
 		}
 		let expected_description_hash = Sha256::hash(init.metadata.as_bytes()).to_byte_array();
 		Ok(HrnResolution::LNURLPay {
-			min_value: Amount::from_milli_sats(init.min_sendable),
-			max_value: Amount::from_milli_sats(init.max_sendable),
+			min_value: Amount::from_milli_sats(init.min_sendable)
+				.map_err(|_| "LNURL initial response had a minimum amount greater than 21M BTC")?,
+			max_value: Amount::from_milli_sats(init.max_sendable).unwrap_or(Amount::MAX),
 			callback: init.callback,
 			expected_description_hash,
 			recipient_description,
@@ -272,7 +273,7 @@ mod tests {
 			assert_eq!(hrn.user(), "send.some");
 			assert_eq!(hrn.domain(), "satsto.me");
 
-			instr.set_amount(Amount::from_sats(100_000), &resolver).await.unwrap()
+			instr.set_amount(Amount::from_sats(100_000).unwrap(), &resolver).await.unwrap()
 		} else {
 			panic!();
 		};
@@ -316,7 +317,7 @@ mod tests {
 			assert_eq!(hrn.user(), "lnurltest");
 			assert_eq!(hrn.domain(), "bitcoin.ninja");
 
-			instr.set_amount(Amount::from_sats(100_000), &HTTPHrnResolver).await.unwrap()
+			instr.set_amount(Amount::from_sats(100_000).unwrap(), &HTTPHrnResolver).await.unwrap()
 		} else {
 			panic!();
 		};

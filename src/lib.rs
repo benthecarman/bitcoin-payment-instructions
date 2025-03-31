@@ -84,11 +84,17 @@ impl PaymentMethod {
 	fn amount(&self) -> Option<Amount> {
 		match self {
 			PaymentMethod::LightningBolt11(invoice) => {
-				invoice.amount_milli_satoshis().map(Amount::from_milli_sats)
+				invoice.amount_milli_satoshis().map(|amt_msat| {
+					let res = Amount::from_milli_sats(amt_msat);
+					debug_assert!(res.is_ok(), "This should be rejected at parse-time");
+					res.unwrap_or(Amount::ZERO)
+				})
 			},
 			PaymentMethod::LightningBolt12(offer) => match offer.amount() {
 				Some(offer::Amount::Bitcoin { amount_msats }) => {
-					Some(Amount::from_milli_sats(amount_msats))
+					let res = Amount::from_milli_sats(amount_msats);
+					debug_assert!(res.is_ok(), "This should be rejected at parse-time");
+					Some(res.unwrap_or(Amount::ZERO))
 				},
 				Some(offer::Amount::Currency { .. }) => None,
 				None => None,
@@ -349,8 +355,9 @@ impl ConfigurableAmountPaymentInstructions {
 			inner.ln_amt = Some(amount);
 		} else {
 			if inner.methods.iter().any(|meth| matches!(meth, PaymentMethod::OnChain(_))) {
-				inner.onchain_amt =
-					Some(Amount::from_milli_sats((amount.milli_sats() + 999) / 1000));
+				let amt = Amount::from_milli_sats((amount.milli_sats() + 999) / 1000)
+					.map_err(|_| "Requested amount was too close to 21M sats to round up")?;
+				inner.onchain_amt = Some(amt);
 			}
 			if inner.methods.iter().any(|meth| meth.is_lightning()) {
 				inner.ln_amt = Some(amount);
@@ -409,7 +416,7 @@ impl PaymentInstructions {
 ///
 /// If any [`PaymentMethod`] is for an amount different by more than this amount from another
 /// [`PaymentMethod`], we will consider it a [`ParseError::InconsistentInstructions`].
-pub const MAX_AMOUNT_DIFFERENCE: Amount = Amount::from_sats(100);
+pub const MAX_AMOUNT_DIFFERENCE: Amount = Amount::from_sats_panicy(100);
 
 /// An error when parsing payment instructions into [`PaymentInstructions`].
 #[derive(Debug)]
@@ -456,9 +463,14 @@ fn check_expiry(_expiry: Duration) -> Result<(), ParseError> {
 	Ok(())
 }
 
+struct Bolt11Amounts {
+	ln_amount: Option<Amount>,
+	fallbacks_amount: Option<Amount>,
+}
+
 fn instructions_from_bolt11(
 	invoice: Bolt11Invoice, network: Network,
-) -> Result<(Option<String>, Option<Amount>, impl Iterator<Item = PaymentMethod>), ParseError> {
+) -> Result<(Option<String>, Bolt11Amounts, impl Iterator<Item = PaymentMethod>), ParseError> {
 	if invoice.network() != network {
 		return Err(ParseError::WrongNetwork);
 	}
@@ -468,24 +480,53 @@ fn instructions_from_bolt11(
 
 	let fallbacks = invoice.fallback_addresses().into_iter().map(PaymentMethod::OnChain);
 
-	let mut fallbacks_amt = None;
-	if !invoice.fallbacks().is_empty() {
-		fallbacks_amt = invoice.amount_milli_satoshis().map(Amount::from_milli_sats);
+	let mut fallbacks_amount = None;
+	let mut ln_amount = None;
+	if let Some(amt_msat) = invoice.amount_milli_satoshis() {
+		let err = "BOLT 11 invoice required an amount greater than 21M BTC";
+		ln_amount = Some(
+			Amount::from_milli_sats(amt_msat).map_err(|_| ParseError::InvalidInstructions(err))?,
+		);
+		if !invoice.fallbacks().is_empty() {
+			fallbacks_amount = Some(
+				Amount::from_sats((amt_msat + 999) / 1000)
+					.map_err(|_| ParseError::InvalidInstructions(err))?,
+			);
+		}
 	}
+
+	let amounts = Bolt11Amounts { ln_amount, fallbacks_amount };
 
 	if let Bolt11InvoiceDescriptionRef::Direct(desc) = invoice.description() {
 		Ok((
 			Some(desc.as_inner().0.clone()),
-			fallbacks_amt,
+			amounts,
 			Some(PaymentMethod::LightningBolt11(invoice)).into_iter().chain(fallbacks),
 		))
 	} else {
 		Ok((
 			None,
-			fallbacks_amt,
+			amounts,
 			Some(PaymentMethod::LightningBolt11(invoice)).into_iter().chain(fallbacks),
 		))
 	}
+}
+
+fn check_offer(offer: Offer, net: Network) -> Result<(Option<String>, PaymentMethod), ParseError> {
+	if !offer.supports_chain(net.chain_hash()) {
+		return Err(ParseError::WrongNetwork);
+	}
+	if let Some(expiry) = offer.absolute_expiry() {
+		check_expiry(expiry)?;
+	}
+	let description = offer.description().map(|desc| desc.0.to_owned());
+	if let Some(offer::Amount::Bitcoin { amount_msats }) = offer.amount() {
+		if Amount::from_milli_sats(amount_msats).is_err() {
+			let err = "BOLT 12 offer requested an amount greater than 21M BTC";
+			return Err(ParseError::InvalidInstructions(err));
+		}
+	}
+	Ok((description, PaymentMethod::LightningBolt12(offer)))
 }
 
 // What str.split_once() should do...
@@ -572,9 +613,9 @@ fn parse_resolved_instructions(
 					if let Some(invoice_string) = v {
 						let invoice = Bolt11Invoice::from_str(invoice_string)
 							.map_err(ParseError::InvalidBolt11)?;
-						let (desc, fallbacks_amt, method_iter) =
+						let (desc, amounts, method_iter) =
 							instructions_from_bolt11(invoice, network)?;
-						if let Some(fallbacks_amt) = fallbacks_amt {
+						if let Some(fallbacks_amt) = amounts.fallbacks_amount {
 							if onchain_amt.is_some() && onchain_amt != Some(fallbacks_amt) {
 								let err = "BIP 321 bitcoin: URI contains lightning (BOLT 11 invoice) instructions with varying values";
 								return Err(ParseError::InconsistentInstructions(err));
@@ -595,16 +636,11 @@ fn parse_resolved_instructions(
 					if let Some(offer_string) = v {
 						let offer =
 							Offer::from_str(offer_string).map_err(ParseError::InvalidBolt12)?;
-						if !offer.supports_chain(network.chain_hash()) {
-							return Err(ParseError::WrongNetwork);
+						let (desc, method) = check_offer(offer, network)?;
+						if let Some(desc) = desc {
+							description = Some(desc);
 						}
-						if let Some(expiry) = offer.absolute_expiry() {
-							check_expiry(expiry)?;
-						}
-						if let Some(desc) = offer.description() {
-							description = Some(desc.0.to_owned());
-						}
-						methods.push(PaymentMethod::LightningBolt12(offer));
+						methods.push(method);
 					} else {
 						let err = "BIP 321 bitcoin: URI contained a lightning (BOLT 11 invoice) instruction without a value";
 						return Err(ParseError::InvalidInstructions(err));
@@ -664,11 +700,16 @@ fn parse_resolved_instructions(
 							return Err(ParseError::InvalidInstructions(err));
 						}
 						had_amt_param = true;
+
 						let err = "The amount parameter in a BIP 321 bitcoin: URI was invalid";
 						let btc_amt =
 							bitcoin::Amount::from_str_in(v, bitcoin::Denomination::Bitcoin)
 								.map_err(|_| ParseError::InvalidInstructions(err))?;
-						let amount = Amount::from_sats(btc_amt.to_sat());
+
+						let err = "The amount parameter in a BIP 321 bitcoin: URI was greater than 21M BTC";
+						let amount = Amount::from_sats(btc_amt.to_sat())
+							.map_err(|_| ParseError::InvalidInstructions(err))?;
+
 						if onchain_amt.is_some() && onchain_amt != Some(amount) {
 							let err = "On-chain fallbacks from a lightning BOLT 11 invoice and the amount parameter in a BIP 321 bitcoin: URI differed in their amounts";
 							return Err(ParseError::InconsistentInstructions(err));
@@ -698,10 +739,9 @@ fn parse_resolved_instructions(
 				return Err(ParseError::UnknownPaymentInstructions);
 			}
 
-			const MAX_MSATS: u64 = 21_000_000_0000_0000_000;
-			let mut min_amt_msat = MAX_MSATS;
-			let mut max_amt_msat = 0;
-			let mut ln_amt_msat = None;
+			let mut min_amt = Amount::MAX;
+			let mut max_amt = Amount::ZERO;
+			let mut ln_amt = None;
 			let mut have_amountless_method = false;
 			let mut have_non_btc_denominated_method = false;
 			for method in methods.iter() {
@@ -711,26 +751,22 @@ fn parse_resolved_instructions(
 					},
 					PaymentMethod::OnChain(_) => onchain_amt,
 				};
-				if let Some(amt_msat) = amt.map(|amt| amt.milli_sats()) {
-					if amt_msat > MAX_MSATS {
-						let err = "Had a payment method in a BIP 321 bitcoin: URI which requested more than 21 million BTC";
-						return Err(ParseError::InvalidInstructions(err));
+				if let Some(amt) = amt {
+					if amt < min_amt {
+						min_amt = amt;
 					}
-					if amt_msat < min_amt_msat {
-						min_amt_msat = amt_msat;
-					}
-					if amt_msat > max_amt_msat {
-						max_amt_msat = amt_msat;
+					if amt > max_amt {
+						max_amt = amt;
 					}
 					match method {
 						PaymentMethod::LightningBolt11(_) | PaymentMethod::LightningBolt12(_) => {
-							if let Some(ln_amt_msat) = ln_amt_msat {
-								if ln_amt_msat != amt_msat {
+							if let Some(ln_amt) = ln_amt {
+								if ln_amt != amt {
 									let err = "Had multiple different amounts in lightning payment methods in a BIP 321 bitcoin: URI";
 									return Err(ParseError::InconsistentInstructions(err));
 								}
 							}
-							ln_amt_msat = Some(amt_msat);
+							ln_amt = Some(amt);
 						},
 						PaymentMethod::OnChain(_) => {},
 					}
@@ -745,16 +781,14 @@ fn parse_resolved_instructions(
 				return Err(ParseError::InconsistentInstructions(err));
 			}
 			let cant_have_amt = have_amountless_method || have_non_btc_denominated_method;
-			if (min_amt_msat != MAX_MSATS || max_amt_msat != 0) && cant_have_amt {
+			if (min_amt != Amount::MAX || max_amt != Amount::ZERO) && cant_have_amt {
 				let err = "Had some payment methods in a BIP 321 bitcoin: URI with required amounts, some without";
 				return Err(ParseError::InconsistentInstructions(err));
 			}
-			if max_amt_msat.saturating_sub(min_amt_msat) > MAX_AMOUNT_DIFFERENCE.milli_sats() {
+			if max_amt.saturating_sub(min_amt) > MAX_AMOUNT_DIFFERENCE {
 				let err = "Payment methods differed in ";
 				return Err(ParseError::InconsistentInstructions(err));
 			}
-
-			let ln_amt = ln_amt_msat.map(Amount::from_milli_sats);
 
 			let inner = PaymentInstructionsImpl {
 				description,
@@ -798,19 +832,18 @@ fn parse_resolved_instructions(
 		// invoices.
 		let invoice =
 			Bolt11Invoice::from_str(uri_suffix.unwrap_or("")).map_err(ParseError::InvalidBolt11)?;
-		let ln_amt = invoice.amount_milli_satoshis().map(Amount::from_milli_sats);
-		let (description, onchain_amt, method_iter) = instructions_from_bolt11(invoice, network)?;
+		let (description, amounts, method_iter) = instructions_from_bolt11(invoice, network)?;
 		let inner = PaymentInstructionsImpl {
 			description,
 			methods: method_iter.collect(),
-			onchain_amt,
-			ln_amt,
+			onchain_amt: amounts.fallbacks_amount,
+			ln_amt: amounts.ln_amount,
 			lnurl: None,
 			pop_callback: None,
 			hrn,
 			hrn_proof,
 		};
-		if ln_amt.is_some() {
+		if amounts.ln_amount.is_some() {
 			Ok(PaymentInstructions::FixedAmount(FixedAmountPaymentInstructions { inner }))
 		} else {
 			Ok(PaymentInstructions::ConfigurableAmount(ConfigurableAmountPaymentInstructions {
@@ -832,19 +865,18 @@ fn parse_resolved_instructions(
 			},
 		}))
 	} else if let Ok(invoice) = Bolt11Invoice::from_str(instructions) {
-		let ln_amt = invoice.amount_milli_satoshis().map(Amount::from_milli_sats);
-		let (description, onchain_amt, method_iter) = instructions_from_bolt11(invoice, network)?;
+		let (description, amounts, method_iter) = instructions_from_bolt11(invoice, network)?;
 		let inner = PaymentInstructionsImpl {
 			description,
 			methods: method_iter.collect(),
-			onchain_amt,
-			ln_amt,
+			onchain_amt: amounts.fallbacks_amount,
+			ln_amt: amounts.ln_amount,
 			lnurl: None,
 			pop_callback: None,
 			hrn,
 			hrn_proof,
 		};
-		if ln_amt.is_some() {
+		if amounts.ln_amount.is_some() {
 			Ok(PaymentInstructions::FixedAmount(FixedAmountPaymentInstructions { inner }))
 		} else {
 			Ok(PaymentInstructions::ConfigurableAmount(ConfigurableAmountPaymentInstructions {
@@ -852,21 +884,13 @@ fn parse_resolved_instructions(
 			}))
 		}
 	} else if let Ok(offer) = Offer::from_str(instructions) {
-		if !offer.supports_chain(network.chain_hash()) {
-			return Err(ParseError::WrongNetwork);
-		}
-		if let Some(expiry) = offer.absolute_expiry() {
-			check_expiry(expiry)?;
-		}
 		let has_amt = offer.amount().is_some();
-		let description = offer.description().map(|s| s.0.to_owned());
-		let method = PaymentMethod::LightningBolt12(offer);
-		let ln_amt = method.amount();
+		let (description, method) = check_offer(offer, network)?;
 		let inner = PaymentInstructionsImpl {
+			ln_amt: method.amount(),
 			description,
 			methods: vec![method],
 			onchain_amt: None,
-			ln_amt,
 			lnurl: None,
 			pop_callback: None,
 			hrn,
@@ -965,7 +989,7 @@ mod tests {
 				assert_eq!(parsed.min_amt(), None);
 				assert_eq!(parsed.min_amt(), None);
 				assert_eq!(parsed.methods().collect::<Vec<_>>().len(), 1);
-				parsed.set_amount(Amount::from_sats(10), &DummyHrnResolver).await.unwrap()
+				parsed.set_amount(Amount::from_sats(10).unwrap(), &DummyHrnResolver).await.unwrap()
 			},
 			_ => panic!(),
 		};
@@ -1021,7 +1045,7 @@ mod tests {
 		let invoice = Bolt11Invoice::from_str(SAMPLE_INVOICE).unwrap();
 		let parsed = check_ln_invoice(SAMPLE_INVOICE).await.unwrap();
 
-		let amt = invoice.amount_milli_satoshis().map(Amount::from_milli_sats).unwrap();
+		let amt = invoice.amount_milli_satoshis().map(Amount::from_milli_sats).unwrap().unwrap();
 
 		let parsed = match parsed {
 			PaymentInstructions::FixedAmount(parsed) => parsed,
@@ -1055,16 +1079,16 @@ mod tests {
 
 		assert_eq!(parsed.methods().len(), 2);
 		assert_eq!(
-			parsed.max_amount(),
-			invoice.amount_milli_satoshis().map(Amount::from_milli_sats),
+			parsed.max_amount().unwrap(),
+			invoice.amount_milli_satoshis().map(Amount::from_milli_sats).unwrap().unwrap(),
 		);
 		assert_eq!(
-			parsed.ln_payment_amount(),
-			invoice.amount_milli_satoshis().map(Amount::from_milli_sats),
+			parsed.ln_payment_amount().unwrap(),
+			invoice.amount_milli_satoshis().map(Amount::from_milli_sats).unwrap().unwrap(),
 		);
 		assert_eq!(
-			parsed.onchain_payment_amount(),
-			invoice.amount_milli_satoshis().map(Amount::from_milli_sats),
+			parsed.onchain_payment_amount().unwrap(),
+			invoice.amount_milli_satoshis().map(Amount::from_milli_sats).unwrap().unwrap(),
 		);
 
 		assert_eq!(parsed.recipient_description(), None); // no description for a description hash
@@ -1124,7 +1148,10 @@ mod tests {
 		};
 
 		assert_eq!(parsed.methods().len(), 1);
-		assert_eq!(parsed.methods()[0].amount(), amt_msats.map(Amount::from_milli_sats));
+		assert_eq!(
+			parsed.methods()[0].amount().unwrap(),
+			amt_msats.map(Amount::from_milli_sats).unwrap().unwrap()
+		);
 		assert_eq!(parsed.recipient_description(), Some("faucet"));
 		assert!(matches!(parsed.methods()[0], PaymentMethod::LightningBolt12(_)));
 	}
@@ -1143,10 +1170,12 @@ mod tests {
 			_ => panic!(),
 		};
 
+		let expected_amount = Amount::from_sats(5_000_000_000).unwrap();
+
 		assert_eq!(parsed.methods().len(), 1);
-		assert_eq!(parsed.max_amount(), Some(Amount::from_sats(5_000_000_000)));
+		assert_eq!(parsed.max_amount(), Some(expected_amount));
 		assert_eq!(parsed.ln_payment_amount(), None);
-		assert_eq!(parsed.onchain_payment_amount(), Some(Amount::from_sats(5_000_000_000)));
+		assert_eq!(parsed.onchain_payment_amount(), Some(expected_amount));
 		assert_eq!(parsed.recipient_description(), None);
 		assert!(matches!(parsed.methods()[0], PaymentMethod::OnChain(_)));
 	}
@@ -1170,10 +1199,12 @@ mod tests {
 			_ => panic!(),
 		};
 
+		let expected_amount = Amount::from_milli_sats(1_000_000).unwrap();
+
 		assert_eq!(parsed.methods().len(), 2);
-		assert_eq!(parsed.onchain_payment_amount(), Some(Amount::from_milli_sats(1_000_000)));
-		assert_eq!(parsed.ln_payment_amount(), Some(Amount::from_milli_sats(1_000_000)));
-		assert_eq!(parsed.max_amount(), Some(Amount::from_milli_sats(1_000_000)));
+		assert_eq!(parsed.onchain_payment_amount(), Some(expected_amount));
+		assert_eq!(parsed.ln_payment_amount(), Some(expected_amount));
+		assert_eq!(parsed.max_amount(), Some(expected_amount));
 		assert_eq!(parsed.recipient_description(), Some("sbddesign: For lunch Tuesday"));
 		if let PaymentMethod::OnChain(address) = &parsed.methods()[0] {
 			assert_eq!(address.to_string(), SAMPLE_BIP21_WITH_INVOICE_ADDR);
@@ -1221,10 +1252,12 @@ mod tests {
 			_ => panic!(),
 		};
 
+		let expected_amount = Amount::from_milli_sats(100_000).unwrap();
+
 		assert_eq!(parsed.methods().len(), 2);
-		assert_eq!(parsed.max_amount(), Some(Amount::from_milli_sats(100_000)));
-		assert_eq!(parsed.onchain_payment_amount(), Some(Amount::from_milli_sats(100_000)));
-		assert_eq!(parsed.ln_payment_amount(), Some(Amount::from_milli_sats(100_000)));
+		assert_eq!(parsed.max_amount(), Some(expected_amount));
+		assert_eq!(parsed.onchain_payment_amount(), Some(expected_amount));
+		assert_eq!(parsed.ln_payment_amount(), Some(expected_amount));
 		assert_eq!(parsed.recipient_description(), Some("yooo"));
 		assert!(matches!(parsed.methods()[0], PaymentMethod::OnChain(_)));
 		assert!(matches!(parsed.methods()[1], PaymentMethod::LightningBolt11(_)));

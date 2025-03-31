@@ -74,7 +74,7 @@ mod tests {
 			assert_eq!(hrn.user(), "send.some");
 			assert_eq!(hrn.domain(), "satsto.me");
 
-			instr.set_amount(Amount::from_sats(100_000), &resolver).await.unwrap()
+			instr.set_amount(Amount::from_sats(100_000).unwrap(), &resolver).await.unwrap()
 		} else {
 			panic!();
 		};
