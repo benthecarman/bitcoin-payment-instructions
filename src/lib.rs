@@ -347,7 +347,8 @@ impl ConfigurableAmountPaymentInstructions {
 			debug_assert!(inner.onchain_amt.is_none());
 			debug_assert!(inner.pop_callback.is_none());
 			debug_assert!(inner.hrn_proof.is_none());
-			let bolt11 = resolver.resolve_lnurl(callback, amount, expected_desc_hash).await?;
+			let bolt11 =
+				resolver.resolve_lnurl_to_invoice(callback, amount, expected_desc_hash).await?;
 			if bolt11.amount_milli_satoshis() != Some(amount.milli_sats()) {
 				return Err("LNURL resolution resulted in a BOLT 11 invoice with the wrong amount");
 			}
@@ -428,6 +429,8 @@ pub enum ParseError {
 	InvalidBolt12(Bolt12ParseError),
 	/// An invalid on-chain address was encountered
 	InvalidOnChain(address::ParseError),
+	/// An invalid lnurl was encountered
+	InvalidLnurl(&'static str),
 	/// The payment instructions encoded instructions for a network other than the one specified.
 	WrongNetwork,
 	/// Different parts of the payment instructions were inconsistent.
@@ -944,6 +947,55 @@ impl PaymentInstructions {
 					))
 				},
 			}
+		} else if let Some(idx) = instructions.to_lowercase().rfind("lnurl") {
+			let mut lnurl_str = &instructions[idx..];
+			// first try to decode as a bech32-encoded lnurl, if that fails, try to drop a
+			// trailing `&` and decode again, this could a http query param
+			if let Some(idx) = lnurl_str.find('&') {
+				lnurl_str = &lnurl_str[..idx];
+			}
+			if let Some(idx) = lnurl_str.find('#') {
+				lnurl_str = &lnurl_str[..idx];
+			}
+			if let Ok((_, data)) = bitcoin::bech32::decode(lnurl_str) {
+				let url = String::from_utf8(data)
+					.map_err(|_| ParseError::InvalidLnurl("Not utf-8 encoded string"))?;
+				let resolution = hrn_resolver.resolve_lnurl(&url).await;
+				let resolution = resolution.map_err(ParseError::HrnResolutionError)?;
+				match resolution {
+					HrnResolution::DNSSEC { .. } => Err(ParseError::HrnResolutionError(
+						"Unexpected return when resolving lnurl",
+					)),
+					HrnResolution::LNURLPay {
+						min_value,
+						max_value,
+						expected_description_hash,
+						recipient_description,
+						callback,
+					} => {
+						let inner = PaymentInstructionsImpl {
+							description: recipient_description,
+							methods: Vec::new(),
+							lnurl: Some((
+								callback,
+								expected_description_hash,
+								min_value,
+								max_value,
+							)),
+							onchain_amt: None,
+							ln_amt: None,
+							pop_callback: None,
+							hrn: None,
+							hrn_proof: None,
+						};
+						Ok(PaymentInstructions::ConfigurableAmount(
+							ConfigurableAmountPaymentInstructions { inner },
+						))
+					},
+				}
+			} else {
+				parse_resolved_instructions(instructions, network, supports_pops, None, None)
+			}
 		} else {
 			parse_resolved_instructions(instructions, network, supports_pops, None, None)
 		}
@@ -965,6 +1017,19 @@ mod tests {
 	const SAMPLE_INVOICE: &str = "lnbc20m1pn7qa2ndqqnp4q0d3p2sfluzdx45tqcsh2pu5qc7lgq0xs578ngs6s0s68ua4h7cvspp5kwzshmne5zw3lnfqdk8cv26mg9ndjapqzhcxn2wtn9d6ew5e2jfqsp5h3u5f0l522vs488h6n8zm5ca2lkpva532fnl2kp4wnvsuq445erq9qyysgqcqpcxqppz4395v2sjh3t5pzckgeelk9qf0z3fm9jzxtjqpqygayt4xyy7tpjvq5pe7f6727du2mg3t2tfe0cd53de2027ff7es7smtew8xx5x2spwuvkdz";
 	const SAMPLE_OFFER: &str = "lno1qgs0v8hw8d368q9yw7sx8tejk2aujlyll8cp7tzzyh5h8xyppqqqqqqgqvqcdgq2qenxzatrv46pvggrv64u366d5c0rr2xjc3fq6vw2hh6ce3f9p7z4v4ee0u7avfynjw9q";
 	const SAMPLE_BIP21: &str = "bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?amount=50&label=Luke-Jr&message=Donation%20for%20project%20xyz";
+
+	#[cfg(feature = "http")]
+	const SAMPLE_LNURL: &str = "LNURL1DP68GURN8GHJ7MRWW4EXCTNDW46XJMNEDEJHGTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHHYETXW4HXG0AH8NK";
+	#[cfg(feature = "http")]
+	const SAMPLE_LNURL_LN_PREFIX: &str = "lightning:LNURL1DP68GURN8GHJ7MRWW4EXCTNDW46XJMNEDEJHGTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHHYETXW4HXG0AH8NK";
+	#[cfg(feature = "http")]
+	const SAMPLE_LNURL_FALLBACK: &str = "https://service.com/giftcard/redeem?id=123&lightning=LNURL1DP68GURN8GHJ7MRWW4EXCTNDW46XJMNEDEJHGTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHHYETXW4HXG0AH8NK";
+	#[cfg(feature = "http")]
+	const SAMPLE_LNURL_FALLBACK_WITH_AND: &str = "https://service.com/giftcard/redeem?id=123&lightning=LNURL1DP68GURN8GHJ7MRWW4EXCTNDW46XJMNEDEJHGTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHHYETXW4HXG0AH8NK&extra=my_extra_param";
+	#[cfg(feature = "http")]
+	const SAMPLE_LNURL_FALLBACK_WITH_HASHTAG: &str = "https://service.com/giftcard/redeem?id=123&lightning=LNURL1DP68GURN8GHJ7MRWW4EXCTNDW46XJMNEDEJHGTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHHYETXW4HXG0AH8NK#extra=my_extra_param";
+	#[cfg(feature = "http")]
+	const SAMPLE_LNURL_FALLBACK_WITH_BOTH: &str = "https://service.com/giftcard/redeem?id=123&lightning=LNURL1DP68GURN8GHJ7MRWW4EXCTNDW46XJMNEDEJHGTNRDAKJ7TNHV4KXCTTTDEHHWM30D3H82UNVWQHHYETXW4HXG0AH8NK&extra=my_extra_param#extra2=another_extra_param";
 
 	const SAMPLE_BIP21_WITH_INVOICE: &str = "bitcoin:BC1QYLH3U67J673H6Y6ALV70M0PL2YZ53TZHVXGG7U?amount=0.00001&label=sbddesign%3A%20For%20lunch%20Tuesday&message=For%20lunch%20Tuesday&lightning=LNBC10U1P3PJ257PP5YZTKWJCZ5FTL5LAXKAV23ZMZEKAW37ZK6KMV80PK4XAEV5QHTZ7QDPDWD3XGER9WD5KWM36YPRX7U3QD36KUCMGYP282ETNV3SHJCQZPGXQYZ5VQSP5USYC4LK9CHSFP53KVCNVQ456GANH60D89REYKDNGSMTJ6YW3NHVQ9QYYSSQJCEWM5CJWZ4A6RFJX77C490YCED6PEMK0UPKXHY89CMM7SCT66K8GNEANWYKZGDRWRFJE69H9U5U0W57RRCSYSAS7GADWMZXC8C6T0SPJAZUP6";
 	#[cfg(not(feature = "std"))]
@@ -1276,5 +1341,37 @@ mod tests {
 			.await,
 			Err(ParseError::InstructionsExpired),
 		);
+	}
+
+	#[cfg(feature = "http")]
+	async fn test_lnurl(str: &str) {
+		let parsed = PaymentInstructions::parse(
+			str,
+			Network::Signet,
+			&http_resolver::HTTPHrnResolver,
+			false,
+		)
+		.await
+		.unwrap();
+
+		let parsed = match parsed {
+			PaymentInstructions::ConfigurableAmount(parsed) => parsed,
+			_ => panic!(),
+		};
+
+		assert_eq!(parsed.methods().count(), 1);
+		assert_eq!(parsed.min_amt(), Some(Amount::from_milli_sats(1000).unwrap()));
+		assert_eq!(parsed.max_amt(), Some(Amount::from_milli_sats(11000000000).unwrap()));
+	}
+
+	#[cfg(feature = "http")]
+	#[tokio::test]
+	async fn parse_lnurl() {
+		test_lnurl(SAMPLE_LNURL).await;
+		test_lnurl(SAMPLE_LNURL_LN_PREFIX).await;
+		test_lnurl(SAMPLE_LNURL_FALLBACK).await;
+		test_lnurl(SAMPLE_LNURL_FALLBACK_WITH_AND).await;
+		test_lnurl(SAMPLE_LNURL_FALLBACK_WITH_HASHTAG).await;
+		test_lnurl(SAMPLE_LNURL_FALLBACK_WITH_BOTH).await;
 	}
 }
