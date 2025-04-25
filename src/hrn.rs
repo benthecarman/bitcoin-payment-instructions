@@ -42,7 +42,7 @@ impl HumanReadableName {
 		if user.is_empty() || domain.is_empty() {
 			return Err(());
 		}
-		if !str_chars_allowed(&user) || !str_chars_allowed(&domain) {
+		if !str_chars_allowed(user) || !str_chars_allowed(domain) {
 			return Err(());
 		}
 		let mut contents = [0; 255 - REQUIRED_EXTRA_LEN];
@@ -60,7 +60,7 @@ impl HumanReadableName {
 	/// If `user` includes the standard BIP 353 ₿ prefix it is automatically removed as required by
 	/// BIP 353.
 	pub fn from_encoded(encoded: &str) -> Result<HumanReadableName, ()> {
-		if let Some((user, domain)) = encoded.strip_prefix('₿').unwrap_or(encoded).split_once("@")
+		if let Some((user, domain)) = encoded.strip_prefix('₿').unwrap_or(encoded).split_once('@')
 		{
 			Self::new(user, domain)
 		} else {
