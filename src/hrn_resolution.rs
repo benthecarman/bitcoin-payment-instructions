@@ -111,10 +111,14 @@ pub trait HrnResolver {
 	/// can be further parsed as payment instructions.
 	fn resolve_hrn<'a>(&'a self, hrn: &'a HumanReadableName) -> HrnResolutionFuture<'a>;
 
+	/// Resolves the given Lnurl into a [`HrnResolution`] containing a result which
+	/// can be further parsed as payment instructions.
+	fn resolve_lnurl<'a>(&'a self, url: &'a str) -> HrnResolutionFuture<'a>;
+
 	/// Resolves the LNURL callback (from a [`HrnResolution::LNURLPay`]) into a [`Bolt11Invoice`].
 	///
 	/// This shall only be called if [`Self::resolve_hrn`] returns an [`HrnResolution::LNURLPay`].
-	fn resolve_lnurl<'a>(
+	fn resolve_lnurl_to_invoice<'a>(
 		&'a self, callback_url: String, amount: Amount, expected_description_hash: [u8; 32],
 	) -> LNURLResolutionFuture<'a>;
 }
@@ -128,7 +132,13 @@ impl HrnResolver for DummyHrnResolver {
 		Box::pin(async { Err("Human Readable Name resolution not supported") })
 	}
 
-	fn resolve_lnurl<'a>(&'a self, _: String, _: Amount, _: [u8; 32]) -> LNURLResolutionFuture<'a> {
+	fn resolve_lnurl<'a>(&'a self, _lnurl: &'a str) -> HrnResolutionFuture<'a> {
+		Box::pin(async { Err("LNURL resolution not supported") })
+	}
+
+	fn resolve_lnurl_to_invoice<'a>(
+		&'a self, _: String, _: Amount, _: [u8; 32],
+	) -> LNURLResolutionFuture<'a> {
 		Box::pin(async { Err("LNURL resolution not supported") })
 	}
 }

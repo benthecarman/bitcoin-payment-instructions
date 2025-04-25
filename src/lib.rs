@@ -347,7 +347,8 @@ impl ConfigurableAmountPaymentInstructions {
 			debug_assert!(inner.onchain_amt.is_none());
 			debug_assert!(inner.pop_callback.is_none());
 			debug_assert!(inner.hrn_proof.is_none());
-			let bolt11 = resolver.resolve_lnurl(callback, amount, expected_desc_hash).await?;
+			let bolt11 =
+				resolver.resolve_lnurl_to_invoice(callback, amount, expected_desc_hash).await?;
 			if bolt11.amount_milli_satoshis() != Some(amount.milli_sats()) {
 				return Err("LNURL resolution resulted in a BOLT 11 invoice with the wrong amount");
 			}
@@ -428,6 +429,8 @@ pub enum ParseError {
 	InvalidBolt12(Bolt12ParseError),
 	/// An invalid on-chain address was encountered
 	InvalidOnChain(address::ParseError),
+	/// An invalid lnurl was encountered
+	InvalidLnurl(&'static str),
 	/// The payment instructions encoded instructions for a network other than the one specified.
 	WrongNetwork,
 	/// Different parts of the payment instructions were inconsistent.
@@ -937,6 +940,38 @@ impl PaymentInstructions {
 						ln_amt: None,
 						pop_callback: None,
 						hrn: Some(hrn),
+						hrn_proof: None,
+					};
+					Ok(PaymentInstructions::ConfigurableAmount(
+						ConfigurableAmountPaymentInstructions { inner },
+					))
+				},
+			}
+		} else if let Some((_, data)) =
+			bitcoin::bech32::decode(instructions).ok().filter(|(hrp, _)| hrp.as_str() == "lnurl")
+		{
+			let url = String::from_utf8(data).map_err(|_| ParseError::InvalidLnurl(""))?;
+			let resolution = hrn_resolver.resolve_lnurl(&url).await;
+			let resolution = resolution.map_err(ParseError::HrnResolutionError)?;
+			match resolution {
+				HrnResolution::DNSSEC { .. } => {
+					Err(ParseError::HrnResolutionError("Unexpected return when resolving lnurl"))
+				},
+				HrnResolution::LNURLPay {
+					min_value,
+					max_value,
+					expected_description_hash,
+					recipient_description,
+					callback,
+				} => {
+					let inner = PaymentInstructionsImpl {
+						description: recipient_description,
+						methods: Vec::new(),
+						lnurl: Some((callback, expected_description_hash, min_value, max_value)),
+						onchain_amt: None,
+						ln_amt: None,
+						pop_callback: None,
+						hrn: None,
 						hrn_proof: None,
 					};
 					Ok(PaymentInstructions::ConfigurableAmount(

@@ -43,7 +43,16 @@ impl HrnResolver for Resolver<'_> {
 		})
 	}
 
-	fn resolve_lnurl<'a>(&'a self, _: String, _: Amount, _: [u8; 32]) -> LNURLResolutionFuture<'a> {
+	fn resolve_lnurl<'a>(&'a self, _: &'a str) -> HrnResolutionFuture<'a> {
+		Box::pin(async {
+			let mut us = self.0.lock().unwrap();
+			us.0.take().unwrap()
+		})
+	}
+
+	fn resolve_lnurl_to_invoice<'a>(
+		&'a self, _: String, _: Amount, _: [u8; 32],
+	) -> LNURLResolutionFuture<'a> {
 		Box::pin(async {
 			let mut us = self.0.lock().unwrap();
 			if let Ok(s) = std::str::from_utf8(us.1.take().unwrap()) {
