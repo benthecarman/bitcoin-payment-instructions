@@ -17,9 +17,8 @@ use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef};
 
 use crate::amount::Amount;
 use crate::dnssec_utils::resolve_proof;
-use crate::hrn::HumanReadableName;
 use crate::hrn_resolution::{
-	HrnResolution, HrnResolutionFuture, HrnResolver, LNURLResolutionFuture,
+	HrnResolution, HrnResolutionFuture, HrnResolver, HumanReadableName, LNURLResolutionFuture,
 };
 
 const DOH_ENDPOINT: &'static str = "https://dns.google/dns-query?dns=";

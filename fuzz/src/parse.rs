@@ -10,9 +10,9 @@
 use bitcoin::Network;
 
 use bitcoin_payment_instructions::amount::Amount;
-use bitcoin_payment_instructions::hrn::HumanReadableName;
 use bitcoin_payment_instructions::hrn_resolution::{
-	DummyHrnResolver, HrnResolution, HrnResolutionFuture, HrnResolver, LNURLResolutionFuture,
+	DummyHrnResolver, HrnResolution, HrnResolutionFuture, HrnResolver, HumanReadableName,
+	LNURLResolutionFuture,
 };
 use bitcoin_payment_instructions::PaymentInstructions;
 
