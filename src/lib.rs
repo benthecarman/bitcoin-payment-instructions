@@ -918,6 +918,8 @@ impl PaymentInstructions {
 		supports_proof_of_payment_callbacks: bool,
 	) -> Result<PaymentInstructions, ParseError> {
 		let supports_pops = supports_proof_of_payment_callbacks;
+		let (uri_proto, _uri_suffix) = split_once(instructions, ':');
+
 		if let Ok(hrn) = HumanReadableName::from_encoded(instructions) {
 			let resolution = hrn_resolver.resolve_hrn(&hrn).await;
 			let resolution = resolution.map_err(ParseError::HrnResolutionError)?;
@@ -947,7 +949,11 @@ impl PaymentInstructions {
 					))
 				},
 			}
-		} else if let Some(idx) = instructions.to_lowercase().rfind("lnurl") {
+		} else if uri_proto.eq_ignore_ascii_case("bitcoin:") {
+			// If it looks like a BIP 353 URI, jump straight to parsing it and ignore any LNURL
+			// overrides.
+			parse_resolved_instructions(instructions, network, supports_pops, None, None)
+		} else if let Some(idx) = instructions.to_ascii_lowercase().rfind("lnurl") {
 			let mut lnurl_str = &instructions[idx..];
 			// first try to decode as a bech32-encoded lnurl, if that fails, try to drop a
 			// trailing `&` and decode again, this could a http query param
