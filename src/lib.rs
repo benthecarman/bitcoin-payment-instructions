@@ -947,7 +947,7 @@ impl PaymentInstructions {
 					))
 				},
 			}
-		} else if let Some(idx) = instructions.to_lowercase().rfind("lnurl") {
+		} else if let Some(idx) = instructions.to_ascii_lowercase().rfind("lnurl") {
 			let mut lnurl_str = &instructions[idx..];
 			// first try to decode as a bech32-encoded lnurl, if that fails, try to drop a
 			// trailing `&` and decode again, this could a http query param
