@@ -39,9 +39,16 @@ impl HrnResolver for DNSHrnResolver {
 		Box::pin(async move { self.resolve_dns(hrn).await })
 	}
 
-	fn resolve_lnurl<'a>(&'a self, _: String, _: Amount, _: [u8; 32]) -> LNURLResolutionFuture<'a> {
-		let err = "resolve_lnurl shouldn't be called when we don't reoslve LNURL";
-		debug_assert!(false, "{}", err);
+	fn resolve_lnurl<'a>(&'a self, _url: &'a str) -> HrnResolutionFuture<'a> {
+		let err = "DNS resolver does not support LNURL resolution";
+		Box::pin(async move { Err(err) })
+	}
+
+	fn resolve_lnurl_to_invoice<'a>(
+		&'a self, _: String, _: Amount, _: [u8; 32],
+	) -> LNURLResolutionFuture<'a> {
+		let err = "resolve_lnurl_to_invoice shouldn't be called when we don't resolve LNURL";
+		debug_assert!(false, "{err}");
 		Box::pin(async move { Err(err) })
 	}
 }

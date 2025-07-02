@@ -134,17 +134,16 @@ impl HTTPHrnResolver {
 		resolve_proof(&dns_name, proof)
 	}
 
-	async fn resolve_lnurl(&self, hrn: &HumanReadableName) -> Result<HrnResolution, &'static str> {
-		let init_url = format!("https://{}/.well-known/lnurlp/{}", hrn.domain(), hrn.user());
+	async fn resolve_lnurl_impl(&self, lnurl_url: &str) -> Result<HrnResolution, &'static str> {
 		let err = "Failed to fetch LN-Address initial well-known endpoint";
 		let init: LNURLInitResponse =
-			reqwest::get(init_url).await.map_err(|_| err)?.json().await.map_err(|_| err)?;
+			reqwest::get(lnurl_url).await.map_err(|_| err)?.json().await.map_err(|_| err)?;
 
 		if init.tag != "payRequest" {
-			return Err("LNURL initial init_responseponse had an incorrect tag value");
+			return Err("LNURL initial init_response had an incorrect tag value");
 		}
 		if init.min_sendable > init.max_sendable {
-			return Err("LNURL initial init_responseponse had no sendable amounts");
+			return Err("LNURL initial init_response had no sendable amounts");
 		}
 
 		let err = "LNURL metadata was not in the correct format";
@@ -176,14 +175,20 @@ impl HrnResolver for HTTPHrnResolver {
 				Err(e) if e == DNS_ERR => {
 					// If we got an error that might indicate the recipient doesn't support BIP
 					// 353, try LN-Address via LNURL
-					self.resolve_lnurl(hrn).await
+					let init_url =
+						format!("https://{}/.well-known/lnurlp/{}", hrn.domain(), hrn.user());
+					self.resolve_lnurl(&init_url).await
 				},
 				Err(e) => Err(e),
 			}
 		})
 	}
 
-	fn resolve_lnurl<'a>(
+	fn resolve_lnurl<'a>(&'a self, url: &'a str) -> HrnResolutionFuture<'a> {
+		Box::pin(async move { self.resolve_lnurl_impl(url).await })
+	}
+
+	fn resolve_lnurl_to_invoice<'a>(
 		&'a self, mut callback: String, amt: Amount, expected_description_hash: [u8; 32],
 	) -> LNURLResolutionFuture<'a> {
 		Box::pin(async move {
@@ -308,7 +313,8 @@ mod tests {
 		.unwrap();
 
 		let resolved = if let PaymentInstructions::ConfigurableAmount(instr) = instructions {
-			// min_amt and max_amt may or may not be set by the LNURL server
+			assert!(instr.min_amt().is_some());
+			assert!(instr.max_amt().is_some());
 
 			assert_eq!(instr.pop_callback(), None);
 			assert!(instr.bip_353_dnssec_proof().is_none());
@@ -328,6 +334,44 @@ mod tests {
 		let hrn = resolved.human_readable_name().as_ref().unwrap();
 		assert_eq!(hrn.user(), "lnurltest");
 		assert_eq!(hrn.domain(), "bitcoin.ninja");
+
+		for method in resolved.methods() {
+			match method {
+				PaymentMethod::LightningBolt11(invoice) => {
+					assert_eq!(invoice.amount_milli_satoshis(), Some(100_000_000));
+				},
+				PaymentMethod::LightningBolt12(_) => panic!("Should only resolve to BOLT 11"),
+				PaymentMethod::OnChain(_) => panic!("Should only resolve to BOLT 11"),
+			}
+		}
+	}
+
+	#[tokio::test]
+	async fn test_http_lnurl_resolver() {
+		let instructions = PaymentInstructions::parse(
+			// lnurl encoding for lnurltest@bitcoin.ninja
+			"lnurl1dp68gurn8ghj7cnfw33k76tw9ehxjmn2vyhjuam9d3kz66mwdamkutmvde6hymrs9akxuatjd36x2um5ahcq39",
+			Network::Bitcoin,
+			&HTTPHrnResolver,
+			true,
+		)
+		.await
+		.unwrap();
+
+		let resolved = if let PaymentInstructions::ConfigurableAmount(instr) = instructions {
+			assert!(instr.min_amt().is_some());
+			assert!(instr.max_amt().is_some());
+
+			assert_eq!(instr.pop_callback(), None);
+			assert!(instr.bip_353_dnssec_proof().is_none());
+
+			instr.set_amount(Amount::from_sats(100_000).unwrap(), &HTTPHrnResolver).await.unwrap()
+		} else {
+			panic!();
+		};
+
+		assert_eq!(resolved.pop_callback(), None);
+		assert!(resolved.bip_353_dnssec_proof().is_none());
 
 		for method in resolved.methods() {
 			match method {
