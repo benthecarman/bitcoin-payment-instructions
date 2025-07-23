@@ -1351,14 +1351,9 @@ mod tests {
 
 	#[cfg(feature = "http")]
 	async fn test_lnurl(str: &str) {
-		let parsed = PaymentInstructions::parse(
-			str,
-			Network::Signet,
-			&http_resolver::HTTPHrnResolver,
-			false,
-		)
-		.await
-		.unwrap();
+		let resolver = http_resolver::HTTPHrnResolver::default();
+		let parsed =
+			PaymentInstructions::parse(str, Network::Signet, &resolver, false).await.unwrap();
 
 		let parsed = match parsed {
 			PaymentInstructions::ConfigurableAmount(parsed) => parsed,
