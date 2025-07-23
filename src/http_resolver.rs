@@ -156,15 +156,8 @@ impl HTTPHrnResolver {
 
 	async fn resolve_lnurl_impl(&self, lnurl_url: &str) -> Result<HrnResolution, &'static str> {
 		let err = "Failed to fetch LN-Address initial well-known endpoint";
-		let init: LNURLInitResponse = self
-			.client
-			.get(lnurl_url)
-			.send()
-			.await
-			.map_err(|_| err)?
-			.json()
-			.await
-			.map_err(|_| err)?;
+		let init_result = self.client.get(lnurl_url).send().await.map_err(|_| err)?;
+		let init: LNURLInitResponse = init_result.json().await.map_err(|_| err)?;
 
 		if init.tag != "payRequest" {
 			return Err("LNURL initial init_response had an incorrect tag value");
@@ -225,21 +218,14 @@ impl HrnResolver for HTTPHrnResolver {
 			} else {
 				write!(&mut callback, "?amount={}", amt.milli_sats()).expect("Write to String");
 			}
-			let callback_response: LNURLCallbackResponse = self
-				.client
-				.get(callback)
-				.send()
-				.await
-				.map_err(|_| err)?
-				.json()
-				.await
-				.map_err(|_| err)?;
+			let http_response = self.client.get(callback).send().await.map_err(|_| err)?;
+			let response: LNURLCallbackResponse = http_response.json().await.map_err(|_| err)?;
 
-			if !callback_response.routes.is_empty() {
+			if !response.routes.is_empty() {
 				return Err("LNURL callback response contained a non-empty routes array");
 			}
 
-			let invoice = Bolt11Invoice::from_str(&callback_response.pr).map_err(|_| err)?;
+			let invoice = Bolt11Invoice::from_str(&response.pr).map_err(|_| err)?;
 			if invoice.amount_milli_satoshis() != Some(amt.milli_sats()) {
 				return Err("LNURL callback response contained an invoice with the wrong amount");
 			}
