@@ -57,17 +57,17 @@ pub mod dns_resolver;
 #[cfg(feature = "http")]
 pub mod http_resolver;
 
+#[cfg(feature = "std")] // TODO: Drop once we upgrade to LDK 0.2
+pub mod onion_message_resolver;
+
 pub mod amount;
 
 pub mod receive;
 
 pub mod hrn_resolution;
 
-pub mod hrn;
-
 use amount::Amount;
-use hrn::HumanReadableName;
-use hrn_resolution::{HrnResolution, HrnResolver};
+use hrn_resolution::{HrnResolution, HrnResolver, HumanReadableName};
 
 /// A method which can be used to make a payment
 #[derive(Clone, Debug, PartialEq, Eq)]
