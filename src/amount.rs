@@ -10,7 +10,7 @@ use core::fmt;
 
 /// An amount of Bitcoin
 ///
-/// Sadly, because lightning uses "milli-satoshis" we cannot directly use rust-bitcon's `Amount`
+/// Sadly, because lightning uses "milli-satoshis" we cannot directly use rust-bitcoin's `Amount`
 /// type.
 ///
 /// In general, when displaying amounts to the user, you should use [`Self::sats_rounding_up`].
@@ -89,8 +89,8 @@ impl Amount {
 	#[inline]
 	pub const fn saturating_add(self, rhs: Amount) -> Amount {
 		match self.0.checked_add(rhs.0) {
-			Some(amt) if amt <= 21_000_000_0000_0000_000 => Amount(amt),
-			_ => Amount(21_000_000_0000_0000_000),
+			Some(amt) if amt <= MAX_MSATS => Amount(amt),
+			_ => Amount(MAX_MSATS),
 		}
 	}
 
