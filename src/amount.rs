@@ -10,7 +10,7 @@ use core::fmt;
 
 /// An amount of Bitcoin
 ///
-/// Sadly, because lightning uses "milli-satoshis" we cannot directly use rust-bitcon's `Amount`
+/// Sadly, because lightning uses "milli-satoshis" we cannot directly use rust-bitcoin's `Amount`
 /// type.
 ///
 /// In general, when displaying amounts to the user, you should use [`Self::sats_rounding_up`].
