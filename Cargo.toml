@@ -19,8 +19,8 @@ std = ["dnssec-prover"]
 default = ["std"]
 
 [dependencies]
-lightning-invoice = { version = "0.33", default-features = false }
-lightning = { version = "0.1", default-features = false, features = ["dnssec"] }
+lightning-invoice = { git = "https://github.com/tnull/rust-lightning", branch = "2025-08-bump-electrum-client-0.1", default-features = false }
+lightning = { git = "https://github.com/tnull/rust-lightning", branch = "2025-08-bump-electrum-client-0.1", default-features = false, features = ["dnssec"] }
 bitcoin = { version = "0.32", default-features = false }
 getrandom = { version = "0.3", default-features = false }
 dnssec-prover = { version = "0.6", default-features = false, optional = true, features = ["validation", "std", "tokio"] }
