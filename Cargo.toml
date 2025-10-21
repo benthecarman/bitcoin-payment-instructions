@@ -19,8 +19,8 @@ std = ["dnssec-prover", "getrandom"]
 default = ["std"]
 
 [dependencies]
-lightning-invoice = { version = "0.33", default-features = false }
-lightning = { version = "0.1", default-features = false, features = ["dnssec"] }
+lightning-invoice = { version = "0.34.0-beta1", default-features = false }
+lightning = { version = "0.2.0-rc1", default-features = false, features = ["dnssec"] }
 bitcoin = { version = "0.32", default-features = false }
 getrandom = { version = "0.3", default-features = false, optional = true }
 dnssec-prover = { version = "0.6", default-features = false, optional = true, features = ["validation", "std", "tokio"] }
