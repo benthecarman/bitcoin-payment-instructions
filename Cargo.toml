@@ -20,8 +20,8 @@ std = ["dnssec-prover", "getrandom"]
 default = ["std"]
 
 [dependencies]
-lightning-invoice = { version = "0.34", default-features = false }
-lightning = { version = "0.2.0", default-features = false, features = ["dnssec"] }
+lightning-invoice = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "b55f58d7111a48145246a3b8f789c1f65addf083", default-features = false }
+lightning = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "b55f58d7111a48145246a3b8f789c1f65addf083", default-features = false, features = ["dnssec"] }
 bitcoin = { version = "0.32", default-features = false }
 getrandom = { version = "0.3", default-features = false, optional = true }
 dnssec-prover = { version = "0.6", default-features = false, optional = true, features = ["validation", "std", "tokio"] }
@@ -31,5 +31,6 @@ serde_json = { version = "1.0", default-features = false, optional = true, featu
 
 [dev-dependencies]
 tokio = { version = "1.0", default-features = false, features = ["rt", "macros"] }
-lightning = { version = "0.2.0", features = ["std"] }
-lightning-net-tokio = { version = "0.2.0", default-features = false }
+lightning = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "b55f58d7111a48145246a3b8f789c1f65addf083", features = ["std"] }
+lightning-net-tokio = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "b55f58d7111a48145246a3b8f789c1f65addf083", default-features = false }
+
