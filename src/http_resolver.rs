@@ -341,6 +341,8 @@ mod tests {
 				},
 				PaymentMethod::LightningBolt12(_) => {},
 				PaymentMethod::OnChain { .. } => {},
+				PaymentMethod::Bark(_) => {},
+				PaymentMethod::Arkade(_) => {},
 				PaymentMethod::Cashu(_) => panic!("Should only resolve to BOLT 11"),
 			}
 		}
@@ -388,6 +390,8 @@ mod tests {
 				},
 				PaymentMethod::LightningBolt12(_) => panic!("Should only resolve to BOLT 11"),
 				PaymentMethod::OnChain(_) => panic!("Should only resolve to BOLT 11"),
+				PaymentMethod::Bark(_) => panic!("Should only resolve to BOLT 11"),
+				PaymentMethod::Arkade(_) => panic!("Should only resolve to BOLT 11"),
 				PaymentMethod::Cashu(_) => panic!("Should only resolve to BOLT 11"),
 			}
 		}
@@ -428,6 +432,8 @@ mod tests {
 				},
 				PaymentMethod::LightningBolt12(_) => panic!("Should only resolve to BOLT 11"),
 				PaymentMethod::OnChain(_) => panic!("Should only resolve to BOLT 11"),
+				PaymentMethod::Bark(_) => panic!("Should only resolve to BOLT 11"),
+				PaymentMethod::Arkade(_) => panic!("Should only resolve to BOLT 11"),
 				PaymentMethod::Cashu(_) => panic!("Should only resolve to BOLT 11"),
 			}
 		}
