@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll, Waker};
 use std::vec::Vec;
 
-use lightning::blinded_path::message::{DNSResolverContext, MessageContext};
+use lightning::blinded_path::message::DNSResolverContext;
 use lightning::ln::channelmanager::PaymentId;
 use lightning::onion_message::dns_resolution::{
-	DNSResolverMessage, DNSResolverMessageHandler, DNSSECProof, DNSSECQuery, OMNameResolver,
+	DNSResolverMessage, DNSResolverMessageHandler, DNSSECError, DNSSECProof, DNSSECQuery,
+	OMNameResolver,
 };
 use lightning::onion_message::messenger::{
 	Destination, MessageSendInstructions, Responder, ResponseInstruction,
@@ -39,13 +40,13 @@ impl EntropySource for OsRng {
 
 struct ChannelState {
 	waker: Option<Waker>,
-	result: Option<HrnResolution>,
+	result: Option<Result<HrnResolution, &'static str>>,
 }
 
 struct ChannelSend(Arc<Mutex<ChannelState>>);
 
 impl ChannelSend {
-	fn complete(self, result: HrnResolution) {
+	fn complete(self, result: Result<HrnResolution, &'static str>) {
 		let mut state = self.0.lock().unwrap();
 		state.result = Some(result);
 		if let Some(waker) = state.waker.take() {
@@ -61,8 +62,10 @@ impl ChannelSend {
 struct ChannelRecv(Arc<Mutex<ChannelState>>);
 
 impl Future for ChannelRecv {
-	type Output = HrnResolution;
-	fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<HrnResolution> {
+	type Output = Result<HrnResolution, &'static str>;
+	fn poll(
+		self: Pin<&mut Self>, context: &mut Context,
+	) -> Poll<Result<HrnResolution, &'static str>> {
 		let mut state = self.0.lock().unwrap();
 		if let Some(res) = state.result.take() {
 			debug_assert!(state.waker.is_none());
@@ -133,6 +136,21 @@ where
 		*self.pm_event_poker.write().unwrap() = Some(callback);
 	}
 
+	fn fail_resolutions(&self, failed: Vec<(HumanReadableName, PaymentId)>) {
+		let mut pending_resolutions = self.pending_resolutions.lock().unwrap();
+		for (name, payment_id) in failed {
+			if let Some(requests) = pending_resolutions.get_mut(&name) {
+				if let Some(index) = requests.iter().position(|(id, _)| *id == payment_id) {
+					let (_, send) = requests.remove(index);
+					send.complete(Err("Failed to resolve HRN using DNSSEC"));
+				}
+				if requests.is_empty() {
+					pending_resolutions.remove(&name);
+				}
+			}
+		}
+	}
+
 	fn init_resolve_hrn<'a>(
 		&'a self, hrn: &HumanReadableName,
 	) -> Result<ChannelRecv, &'static str> {
@@ -179,11 +197,10 @@ where
 		let payment_id = PaymentId(payment_id);
 
 		let err = "The provided HRN did not fit in a DNS request";
-		// TODO: Once LDK 0.2 ships with a new context authentication method, we shouldn't need the
-		// RNG here and can stop depending on std.
-		let (query, dns_context) =
-			self.resolver.resolve_name(payment_id, *hrn, &OsRng).map_err(|_| err)?;
-		let context = MessageContext::DNSResolver(dns_context);
+		let messages = self
+			.resolver
+			.initiate_resolution(payment_id, *hrn, dns_resolvers, &OsRng)
+			.map_err(|_| err)?;
 
 		let (send, recv) = channel();
 		{
@@ -206,16 +223,7 @@ where
 			});
 		}
 
-		{
-			let mut queue = self.message_queue.lock().unwrap();
-			for destination in dns_resolvers {
-				let instructions = MessageSendInstructions::WithReplyPath {
-					destination,
-					context: context.clone(),
-				};
-				queue.push((DNSResolverMessage::DNSSECQuery(query.clone()), instructions));
-			}
-		}
+		self.message_queue.lock().unwrap().extend(messages);
 
 		let callback = self.pm_event_poker.read().unwrap();
 		if let Some(callback) = &*callback {
@@ -238,20 +246,26 @@ where
 	}
 
 	fn handle_dnssec_proof(&self, msg: DNSSECProof, context: DNSResolverContext) {
-		let results = self.resolver.handle_dnssec_proof_for_uri(msg.clone(), context);
-		if let Some((resolved, res)) = results {
-			let mut pending_resolutions = self.pending_resolutions.lock().unwrap();
-			for (name, _payment_id) in resolved {
-				if let Some(requests) = pending_resolutions.remove(&name) {
-					for (_id, send) in requests {
-						send.complete(HrnResolution::DNSSEC {
-							proof: Some(msg.proof.clone()),
-							result: res.clone(),
-						});
+		match self.resolver.handle_dnssec_proof_for_uri(msg.clone(), context) {
+			Ok((resolved, res)) => {
+				let mut pending_resolutions = self.pending_resolutions.lock().unwrap();
+				for (name, _payment_id) in resolved {
+					if let Some(requests) = pending_resolutions.remove(&name) {
+						for (_id, send) in requests {
+							send.complete(Ok(HrnResolution::DNSSEC {
+								proof: Some(msg.proof.clone()),
+								result: res.clone(),
+							}));
+						}
 					}
 				}
-			}
+			},
+			Err(failed) => self.fail_resolutions(failed),
 		}
+	}
+
+	fn handle_dnssec_error(&self, msg: DNSSECError, context: DNSResolverContext) {
+		self.fail_resolutions(self.resolver.handle_dnssec_error(msg, context));
 	}
 
 	fn release_pending_messages(&self) -> Vec<(DNSResolverMessage, MessageSendInstructions)> {
@@ -267,7 +281,7 @@ where
 	fn resolve_hrn<'a>(&'a self, hrn: &'a HumanReadableName) -> HrnResolutionFuture<'a> {
 		match self.init_resolve_hrn(hrn) {
 			Err(e) => Box::pin(async move { Err(e) }),
-			Ok(recv) => Box::pin(async move { Ok(recv.await) }),
+			Ok(recv) => Box::pin(recv),
 		}
 	}
 
@@ -320,10 +334,80 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn dns_errors_wait_for_all_resolvers_and_preserve_other_requests() {
+		use lightning::blinded_path::message::MessageContext;
+		let graph = Arc::new(NetworkGraph::new(Network::Bitcoin, &TestLogger));
+		let resolver = LDKOnionMessageDNSSECHrnResolver::new(graph);
+		let hrn = HumanReadableName::from_encoded("test@example.com").unwrap();
+		let signer = KeysManager::new(&[42; 32], 0, 0, true, &TestLogger);
+		let node_id = PublicKey::from_secret_key(
+			&bitcoin::secp256k1::Secp256k1::new(),
+			&signer.get_node_secret_key(),
+		);
+		let destinations = vec![Destination::Node(node_id), Destination::Node(node_id)];
+		let mut receivers = Vec::new();
+		let mut queries = Vec::new();
+		for id in [PaymentId([1; 32]), PaymentId([2; 32])] {
+			queries.push(
+				resolver
+					.resolver
+					.initiate_resolution(id, hrn, destinations.clone(), &OsRng)
+					.unwrap(),
+			);
+			let (send, recv) = channel();
+			resolver.pending_resolutions.lock().unwrap().entry(hrn).or_default().push((id, send));
+			receivers.push(recv);
+		}
+		let first_queries = queries.remove(0);
+		let contexts: Vec<_> = first_queries
+			.into_iter()
+			.map(|(query, instructions)| {
+				let DNSResolverMessage::DNSSECQuery(query) = query else {
+					panic!("expected query")
+				};
+				let MessageSendInstructions::WithReplyPath {
+					context: MessageContext::DNSResolver(context),
+					..
+				} = instructions
+				else {
+					panic!("expected reply context")
+				};
+				(query.0, context)
+			})
+			.collect();
+		assert_ne!(contexts[0].1, contexts[1].1);
+		let error = DNSSECError { name: contexts[0].0.clone(), definitely_unresolvable: false };
+		resolver.handle_dnssec_error(error.clone(), contexts[0].1.clone());
+		assert!(receivers[0].0.lock().unwrap().result.is_none());
+		// A duplicate error must not count as the other resolver failing.
+		resolver.handle_dnssec_error(error.clone(), contexts[0].1.clone());
+		assert!(receivers[0].0.lock().unwrap().result.is_none());
+		resolver.handle_dnssec_error(error, contexts[1].1.clone());
+		assert!(receivers.remove(0).await.is_err());
+		assert!(receivers[0].0.lock().unwrap().result.is_none());
+		assert_eq!(resolver.pending_resolutions.lock().unwrap()[&hrn].len(), 1);
+		// Invalid proofs should also finish the request once every query fails.
+		for (query, instructions) in queries.remove(0) {
+			let DNSResolverMessage::DNSSECQuery(query) = query else { panic!("expected query") };
+			let MessageSendInstructions::WithReplyPath {
+				context: MessageContext::DNSResolver(context),
+				..
+			} = instructions
+			else {
+				panic!("expected reply context")
+			};
+			resolver.handle_dnssec_proof(DNSSECProof { name: query.0, proof: Vec::new() }, context);
+		}
+		assert!(receivers.remove(0).await.is_err());
+		assert!(resolver.pending_resolutions.lock().unwrap().is_empty());
+	}
+
+	#[tokio::test]
 	async fn test_dns_om_hrn_resolver() {
 		let graph = Arc::new(NetworkGraph::new(Network::Bitcoin, &TestLogger));
 		let resolver = Arc::new(LDKOnionMessageDNSSECHrnResolver::new(Arc::clone(&graph)));
-		let signer = Arc::new(KeysManager::new(&OsRng.get_secure_random_bytes(), 0, 0, true));
+		let signer =
+			Arc::new(KeysManager::new(&OsRng.get_secure_random_bytes(), 0, 0, true, &TestLogger));
 		let message_router = Arc::new(DefaultMessageRouter::new(Arc::clone(&graph), &OsRng));
 		let messenger = Arc::new(OnionMessenger::new(
 			&OsRng,
